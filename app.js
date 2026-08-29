@@ -1602,6 +1602,7 @@ function screenMenu() {
       <button class="row" id="rescan"><span class="nm">棚を読み直す</span><span class="sub">${S.albums.length} アルバム</span></button>
       <button class="row" id="sweep"><span class="nm">ジャケットを一巡して探す</span><span class="sub">${c} 枚</span></button>
       <button class="row" id="sweepall"><span class="nm">自動で付けた分を探し直す</span></button>
+      <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
       <button class="row" id="hist"><span class="nm">聴いた履歴</span><span class="sub">${S.hist.length} 件</span></button>
@@ -1619,6 +1620,7 @@ function screenMenu() {
     for (const [k, v] of Object.entries(S.covers)) if (!v.manual) delete S.covers[k];
     saveCovers(); go('#/lib'); setTimeout(() => sweepCovers(true), 60);
   };
+  $('#routes').onclick = () => go('#/routes');
   $('#meta').onclick  = () => sweepMeta();
   $('#lists').onclick = () => go('#/lists');
   $('#hist').onclick  = () => go('#/history');
@@ -1649,6 +1651,7 @@ function renderRoute() {
   if (h === '#/menu')            return screenMenu();
   if (h === '#/now')             return screenNow();
   if (h === '#/vis')             return screenVis();
+  if (h === '#/routes')          return screenRoutes();
   if (h === '#/queue')           return screenQueue();
   if (h === '#/smart')           return screenSmart();
   if (h === '#/lists')           return screenLists();
@@ -1658,6 +1661,94 @@ function renderRoute() {
 }
 $('#btnMenu').onclick   = () => go('#/menu');
 $('#btnCovers').onclick = () => sweepCovers(true);
+
+/* ============ 取り出し方を総当たりする ============ */
+/* 直リンクも読み出しも断られたので、どれなら通るのかを実ファイルで確かめる。
+   公開リンクを作る手は、本人が選んだときだけ試す（外から取れる状態を作るため）。 */
+async function probeRoutes(withPublink) {
+  const al = S.albums.find(a => a.tracks.length);
+  if (!al) return '棚に曲がありません';
+  const t = al.tracks[0];
+  const L = ['調べた曲: ' + t.name.slice(0, 40), 'fileid: ' + t.id, ''];
+  const tryIt = async (name, fn) => {
+    const t0 = Date.now();
+    try { const r = await fn(); L.push('○ ' + name + ' — ' + r + ' (' + (Date.now() - t0) + 'ms)'); return true; }
+    catch (e) { L.push('× ' + name + ' — ' + (e.code != null ? e.code + ' ' : '') + (e.message || e)); return false; }
+  };
+  await tryIt('checksumfile（読めるかの確認）', async () => {
+    const r = await api('checksumfile', { fileid: t.id });
+    return 'sha1=' + String(r.sha1 || r.md5 || '').slice(0, 10);
+  });
+  await tryIt('stat（大きさの確認）', async () => {
+    const r = await api('stat', { fileid: t.id });
+    return Math.round((r.metadata.size || 0) / 1048576) + 'MB';
+  });
+  for (const m of ['getfilelink', 'getaudiolink', 'getvideolink']) {
+    await tryIt(m, async () => {
+      const r = await api(m, { fileid: t.id, forcedownload: 0 });
+      return (r.hosts || []).length + '個のあて先';
+    });
+  }
+  for (const fl of [0, 1, 2]) {
+    const ok = await tryIt('file_open flags=' + fl, async () => {
+      const r = await api('file_open', { fileid: t.id, flags: fl });
+      try { await api('file_close', { fd: r.fd }); } catch (e) {}
+      return 'fd=' + r.fd;
+    });
+    if (ok) break;
+  }
+  await tryIt('file_open（path 指定）', async () => {
+    const r = await api('file_open', { path: '/' + t.name, flags: 0 });
+    try { await api('file_close', { fd: r.fd }); } catch (e) {}
+    return 'fd=' + r.fd;
+  });
+  if (withPublink) {
+    L.push('');
+    await tryIt('getfilepublink（公開リンクを作る）', async () => {
+      const r = await api('getfilepublink', { fileid: t.id });
+      S.plTest = r;
+      return 'code=' + String(r.code || '').slice(0, 6) + '…';
+    });
+    if (S.plTest && S.plTest.code) {
+      await tryIt('getpublinkdownload（作ったリンクから取る）', async () => {
+        const r = await api('getpublinkdownload', { code: S.plTest.code });
+        return (r.hosts || []).length + '個のあて先';
+      });
+      await tryIt('作ったリンクを消す', async () => {
+        await api('deletepublink', { linkid: S.plTest.linkid });
+        return '消しました';
+      });
+    }
+  }
+  return L.join('\n');
+}
+
+function screenRoutes() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '取り出し方を調べる';
+  $('#btnCovers').classList.add('hide');
+  main().innerHTML = `
+    <div class="note" style="padding:0 2px 14px">棚の最初の曲を使って、pCloud のどの取り出し方が通るかを一通り試します。
+      曲は再生しません。読み取りだけです。</div>
+    <button class="primary" id="run">調べる</button>
+    <div style="height:12px"></div>
+    <button class="hbtn" id="runp" style="width:100%;padding:11px;border-radius:10px">
+      公開リンクを作る手も含めて調べる</button>
+    <div class="note" style="padding:8px 2px 0">
+      こちらは <b>その曲について「リンクを知っていれば誰でも取得できる状態」を一時的に作ります</b>
+      （符号は推測できない長さで、試した直後に消します）。pCloud 自身がウェブアプリ向けに案内している方法です。
+      作りたくなければ上のボタンだけ押してください。</div>
+    <pre id="out" class="hide" style="white-space:pre-wrap;font-size:11.5px;color:var(--dim);
+      background:#0c0c10;border:1px solid var(--line);border-radius:9px;padding:12px;margin-top:16px;line-height:1.75"></pre>`;
+  const run = async withPub => {
+    const o = $('#out'); o.classList.remove('hide'); o.textContent = '調べています…';
+    try { o.textContent = await probeRoutes(withPub); }
+    catch (e) { o.textContent = '調べられません: ' + (e.message || e); }
+  };
+  $('#run').onclick  = () => run(false);
+  $('#runp').onclick = () => run(true);
+  $('#back').onclick = () => go('#/lib');
+}
 
 /* ============ 何があっても黙らせない ============ */
 /* 押しても何も出ない、が一番困る。拾えなかった失敗は画面の下に出す。 */
@@ -1693,7 +1784,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v13');
+  L.push('版: v14');
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
