@@ -517,6 +517,35 @@ function sheet(head, items) {
   });
   return close;
 }
+function nowSheet() {
+  const c = cur();
+  if (!c) { toast('まだ何も流していません'); return; }
+  const al = c.al, t = al.tracks[c.i];
+  const fa = isFav('a' + al.id), ft = isFav('t' + t.id);
+  const rep = { off: '繰り返さない', all: 'ぜんぶ繰り返す', one: '1曲を繰り返す' };
+  sheet({ name: trackTitle(t), sub: [al.artist, al.name].filter(Boolean).join(' — '), cover: coverOf(al) },
+    [['💿', 'アルバムを開く', () => go('#/album/' + al.id)],
+     ['≡', '次に流れるものを見る', () => go('#/queue')],
+     [ft ? '★' : '☆', ft ? 'この曲の★を外す' : 'この曲を★に入れる',
+      () => { toggleFav('t' + t.id); renderRoute(); }],
+     [fa ? '★' : '☆', fa ? 'このアルバムの★を外す' : 'このアルバムを★に入れる',
+      () => { toggleFav('a' + al.id); renderRoute(); }],
+     ['🔀', 'このアルバムをシャッフル', () => startQueue(shuffle(albumRefs(al)), 0)],
+     ['🔁', '繰り返し：' + rep[P.repeat] + ' →',
+      () => { P.repeat = { off: 'all', all: 'one', one: 'off' }[P.repeat]; LS.set('repeat', P.repeat);
+              toast('繰り返し：' + rep[P.repeat]); }],
+     ['✕', 'この曲を列から外す', () => {
+        P.q.splice(P.qi, 1);
+        if (P.qi >= P.q.length) P.qi = P.q.length - 1;
+        P.q.length ? playAt(P.qi) : (au.pause(), paintPlayer());
+        renderRoute();
+      }],
+     ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
+     ['🎞', 'ビジュアライザーを選ぶ', () => go('#/vis')],
+     [albumOffline(al) ? '🗑' : '↓', albumOffline(al) ? 'このアルバムを端末から消す' : 'このアルバムを端末に入れる',
+      () => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al))]]);
+}
+
 function albumSheet(al) {
   const fav = isFav('a' + al.id);
   sheet({ name: al.name, sub: [al.artist, albumGenre(al), albumYear(al)].filter(Boolean).join(' · '),
@@ -762,6 +791,7 @@ $('#prev').onclick = prevTrack;
 $('#pcov').onclick  = () => go('#/now');
 $('#pinfo').onclick = () => go('#/now');
 $('#pq').onclick    = () => go('#/queue');
+$('#pdots').onclick = () => nowSheet();
 
 /* ============ ビジュアライザー ============ */
 /* 音を解析するには、音のデータに手が届かないといけない。
@@ -1037,7 +1067,7 @@ function screenNow() {
   $('#nplay').onclick  = () => { au.paused ? au.play() : au.pause(); setTimeout(paint, 60); };
   $('#nq').onclick     = () => go('#/queue');
   $('#nalb').onclick   = () => { const c2 = cur(); if (c2) go('#/album/' + c2.al.id); };
-  $('#npick').onclick  = () => go('#/vis');
+  $('#npick').onclick  = () => nowSheet();
   /* 画面を開くたびに見張りを足していたので、離れた後も呼ばれて落ちていた。
      前の分を必ず外してから足す。 */
   if (V.watch) {
@@ -1445,7 +1475,8 @@ async function screenLib() {
   const shown = shownAlbums();
   main().innerHTML = sw + chips + bar + `<div class="grid">${shown.map(al => {
     const cv = coverOf(al), c = S.covers[al.id];
-    const badge = c && !c.manual && c.sure === false ? '<span class="badge auto">要確認</span>'
+    const badge = c && !c.manual && c.sure === false
+                ? `<button class="badge auto" data-fix="${al.id}">要確認 ›</button>`
                 : albumOffline(al) ? '<span class="badge off">端末</span>' : '';
     const star = isFav('a' + al.id) ? '<span class="badge star">★</span>' : '';
     const y = albumYear(al);
@@ -1468,11 +1499,14 @@ async function screenLib() {
   $('#smart').onclick    = () => go('#/smart');
   const byId = id => S.albums.find(a => String(a.id) === String(id));
   main().querySelectorAll('[data-open]').forEach(b => b.onclick = e => {
-    if (e.target.closest('[data-play],[data-menu]')) return;
+    if (e.target.closest('[data-play],[data-menu],[data-fix]')) return;
     go('#/album/' + b.dataset.open);
   });
   main().querySelectorAll('[data-play]').forEach(b => b.onclick = e => {
     e.stopPropagation(); const al = byId(b.dataset.play); if (al) play(al, 0);
+  });
+  main().querySelectorAll('[data-fix]').forEach(b => b.onclick = e => {
+    e.stopPropagation(); go('#/cover/' + b.dataset.fix);
   });
   main().querySelectorAll('[data-menu]').forEach(b => b.onclick = e => {
     e.stopPropagation(); const al = byId(b.dataset.menu); if (al) albumSheet(al);
@@ -2275,7 +2309,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v28');
+  L.push('版: v29');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
