@@ -531,7 +531,24 @@ async function playAt(qi) {
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
     au.crossOrigin = (V.ok && !so.local && so.cors !== false) ? 'anonymous' : null;
-    src = so.url;
+    if (so.relay) {
+      /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
+         通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
+      const cands = [];
+      if (V.direct !== false) { const d = await relayLink(t); if (d) cands.push(['直', d]); }
+      cands.push(['中継', relayUrl('/audio', t)]);
+      for (const [how, u] of cands) {
+        try {
+          await tryLoad(u);
+          src = u;
+          if (V.direct === null) { V.direct = (how === '直'); note('読めた道: ' + how); }
+          break;
+        } catch (e2) { note('読めない道: ' + how); if (how === '直') V.direct = false; }
+      }
+      if (!src) throw new PCloudError(-9, 'どちらの道でも音を読めません');
+    } else {
+      src = so.url;
+    }
   } catch (e) {
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
     const two = V.link === false;
@@ -539,7 +556,7 @@ async function playAt(qi) {
     return;
   }
   try {
-    au.src = src;
+    if (au.src !== src) au.src = src;
     await au.play();
     pending = null;
   } catch (e) {
@@ -616,7 +633,7 @@ function prevTrack() {
 }
 /* 形式が合わない・読めない、は play() の失敗ではなく要素の error に出る。 */
 au.addEventListener('error', () => {
-  const e = au.error; if (!e || au.src === SILENT) return;
+  const e = au.error; if (!e || au.src === SILENT || probing) return;
   const why = { 1:'読み込みを中断した', 2:'通信が切れた', 3:'音の中身を解けない',
                 4:'この形式は再生できません' }[e.code] || ('error ' + e.code);
   const c = cur(), nm = c ? c.al.tracks[c.i].name : '';
@@ -1025,42 +1042,43 @@ const relayUrl = (path, t) => S.relay.replace(/\/+$/, '') + path +
   '?fileid=' + encodeURIComponent(t.id) + '&host=' + encodeURIComponent(S.host) +
   '&auth=' + encodeURIComponent(S.auth);
 
-/* 中継所が出したリンクを、ブラウザが直接取れるかどうか試す。 */
-async function tryDirect(t) {
+/* 読めるかどうかは、実際に音として読ませてみるのが一番確か。
+   fetch で試すと CORS で弾かれるだけで、再生できるかどうかは分からない
+   （<audio> の読み込みに CORS は要らない）。 */
+let probing = false;
+function tryLoad(url, ms = 15000) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = ok => {
+      if (done) return; done = true; probing = false;
+      clearTimeout(timer);
+      au.removeEventListener('loadedmetadata', onOk);
+      au.removeEventListener('error', onNg);
+      ok ? resolve(url) : reject(new Error('読めません'));
+    };
+    const onOk = () => finish(true), onNg = () => finish(false);
+    const timer = setTimeout(() => finish(false), ms);
+    probing = true;
+    au.addEventListener('loadedmetadata', onOk);
+    au.addEventListener('error', onNg);
+    au.src = url;
+    au.load();
+  });
+}
+async function relayLink(t) {
   try {
     const r = await fetch(relayUrl('/link', t), { referrerPolicy: 'no-referrer' });
     const j = await r.json();
-    if (!j.url) return false;
-    const probe = await fetch(j.url, { headers: { Range: 'bytes=0-99' }, referrerPolicy: 'no-referrer' });
-    if (probe.ok || probe.status === 206) {
-      const b = new Uint8Array(await probe.arrayBuffer());
-      const txt = String.fromCharCode(...b.slice(0, 4));
-      if (txt.startsWith('<htm') || txt.startsWith('{')) { note('直接取得: 中身が音でない'); return false; }
-      V.directUrl = j.url;
-      note('直接取得できる（' + probe.status + '）');
-      return true;
-    }
-    note('直接取得は ' + probe.status + ' で断られた');
-  } catch (e) { note('直接取得できない: ' + (e.message || e)); }
-  return false;
+    return j.url || null;
+  } catch (e) { return null; }
 }
 
 async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 中継所がある場合、道は2つ。
-     ① 中継所にリンクだけ出してもらい、ブラウザが直接 pCloud から取る（速い）
-     ② 中継所に中身ごと流してもらう
-     pCloud のリンクは要求した相手に紐づくらしく、②が 410 で断られることがある。
-     どちらが通るかは相手次第なので、一度試して通った方を覚える。 */
-  if (S.relay) {
-    V.directUrl = null;
-    const okDirect = (V.direct === false) ? false : await tryDirect(t);
-    if (V.direct === null) V.direct = okDirect;
-    if (okDirect && V.directUrl) return { url: V.directUrl, local: false, cors: true };
-    return { url: relayUrl('/audio', t), local: false, cors: true };
-  }
+  /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
+  if (S.relay) return { url: null, relay: true, local: false, cors: true };
   if (V.link !== false) {
     try {
       const u = await fileLink(t.id);
@@ -1930,7 +1948,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v18');
+  L.push('版: v19');
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
