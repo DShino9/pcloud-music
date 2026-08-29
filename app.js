@@ -1371,7 +1371,7 @@ async function screenLib() {
       <div class="cov">${cv ? `<img loading="lazy" src="${esc(cv)}" onerror="this.style.display='none'">`
                             : '<span class="ph">♪</span>'}${badge}${star}</div>
       <div class="t">${esc(al.name)}</div>
-      <div class="a">${esc(al.artist)}${y ? ' · ' + y : ''} · ${al.tracks.length}曲</div>
+      <div class="a">${esc(al.artist)}${y ? ' · ' + esc(y) : ''} · ${al.tracks.length}曲</div>
     </button>`;
   }).join('')}</div>` + (shown.length ? '' :
     `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
@@ -1400,7 +1400,7 @@ function screenAlbum(id) {
       <div class="meta">
         <h2>${esc(al.name)}</h2>
         <div class="a">${esc(al.artist)}</div>
-        <div class="a">${[g, y, al.tracks.length + ' 曲', pc ? '聴いた ' + pc + ' 回' : ''].filter(Boolean).join(' · ')}</div>
+        <div class="a">${esc([g, y, al.tracks.length + ' 曲', pc ? '聴いた ' + pc + ' 回' : ''].filter(Boolean).join(' · '))}</div>
         <div class="acts">
           <button class="hbtn" id="pall">▶ 通して聴く</button>
           <button class="hbtn" id="pshuf">🔀</button>
