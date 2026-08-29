@@ -1,17 +1,9 @@
 /* 音楽棚の中継所 — Cloudflare Workers に置く。
  *
- * なぜ要るのか:
- *   pCloud は getfilelink / getaudiolink / getvideolink を、ブラウザが必ず送る
- *   Origin で弾く（7010 Invalid link referer）。pcloud.com 以外に置いたページからは
- *   原理的にリンクを取れない。file_open は HTTP API では使えない（未ログインでも 2003）。
- *   サーバーから呼べば Origin も Referer も付かないので、普通に通る。
- *
- * やること:
- *   /audio?fileid=…&auth=… … pCloud からリンクを取り、中身をそのまま流す（頭出しに対応）
- *   /link ?fileid=…&auth=… … リンクだけ返す
- *   /            … 生きているかの確認
- *
- * 置き方は README の「中継所を置く」を見てください。
+ *   /audio?fileid=…&auth=…        中身を流す（頭出しに対応）
+ *   /link ?fileid=…&auth=…        リンクだけ返す
+ *   …&pub=1 を付けると「公開リンク」経由で取る（要求元に縛られない道）
+ *   /                             生きているかの確認
  */
 
 const CORS = {
@@ -20,7 +12,8 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Range',
   'Access-Control-Expose-Headers': 'Content-Length,Content-Range,Accept-Ranges,Content-Type',
 };
-const linkCache = new Map();   // fileid → {url, exp}
+const linkCache = new Map();   // key → {urls:[…], exp}
+const pubCache  = new Map();   // fileid → {code, linkid}
 
 export default {
   async fetch(req) {
@@ -37,61 +30,85 @@ export default {
     const auth   = url.searchParams.get('auth');
     const fileid = url.searchParams.get('fileid');
     const host   = url.searchParams.get('host') || 'api.pcloud.com';
+    const pub    = url.searchParams.get('pub') === '1';
     if (!auth || !fileid) return json({ error: 'fileid と auth が要ります' }, 400);
     if (!/^e?api\.pcloud\.com$/.test(host)) return json({ error: 'あて先が不正です' }, 400);
 
-    /* リンクは少しの間だけ使い回す。同じ曲を何度も頭出しされたときの往復を減らす。 */
-    const key = host + ':' + fileid;
+    const call = async (method, params) => {
+      const q = new URLSearchParams({ ...params, auth });
+      const r = await fetch(`https://${host}/${method}?${q}`);
+      return r.json();
+    };
+
+    /* 配信元は複数返ってくる。ひとつ目が駄目でも次がある。 */
+    const key = (pub ? 'p:' : 'd:') + host + ':' + fileid;
+    const fresh = async () => {
+      let j;
+      if (pub) {
+        let p = pubCache.get(fileid);
+        if (!p) {
+          const mk = await call('getfilepublink', { fileid });
+          if (mk.result !== 0) return { err: mk };
+          p = { code: mk.code, linkid: mk.linkid };
+          pubCache.set(fileid, p);
+        }
+        j = await call('getpublinkdownload', { code: p.code });
+      } else {
+        j = await call('getfilelink', { fileid, forcedownload: 0 });
+      }
+      if (j.result !== 0) return { err: j };
+      return { urls: (j.hosts || []).map(h => 'https://' + h + j.path) };
+    };
+
     let hit = linkCache.get(key);
     if (!hit || hit.exp < Date.now()) {
-      const api = `https://${host}/getfilelink?forcedownload=0&fileid=${encodeURIComponent(fileid)}&auth=${encodeURIComponent(auth)}`;
-      let j;
-      try { j = await (await fetch(api)).json(); }
-      catch (e) { return json({ error: 'pCloud につながりません' }, 502); }
-      if (j.result !== 0) return json({ result: j.result, error: j.error }, 502);
-      hit = { url: 'https://' + j.hosts[0] + j.path, exp: Date.now() + 20 * 60 * 1000 };
+      const got = await fresh();
+      if (got.err) return json({ result: got.err.result, error: got.err.error, where: pub ? '公開リンク' : '直リンク' }, 502);
+      hit = { urls: got.urls, exp: Date.now() + 5 * 60 * 1000 };
       linkCache.set(key, hit);
       if (linkCache.size > 300) linkCache.delete(linkCache.keys().next().value);
     }
-    if (url.pathname === '/link') return json({ url: hit.url, type: typeOf(hit.url) });
+    if (url.pathname === '/link') return json({ url: hit.urls[0], urls: hit.urls, type: typeOf(hit.urls[0]) });
 
-    /* 中身を素通しする。頭出し（Range）はそのまま渡さないと、曲の途中に飛べない。 */
     const h = new Headers();
     const range = req.headers.get('Range');
     if (range) h.set('Range', range);
     h.set('user-agent', 'Mozilla/5.0 (compatible; ongakudana/1.0)');
-    let up = await fetch(hit.url, { headers: h, redirect: 'follow' });
-    /* pCloud のリンクは短命で、要求した相手に紐づく。410 が返ったら
-       控えを捨てて取り直し、一度だけやり直す。 */
-    if (up.status === 410 || up.status === 403) {
-      linkCache.delete(key);
-      const api2 = `https://${host}/getfilelink?forcedownload=0&fileid=${encodeURIComponent(fileid)}&auth=${encodeURIComponent(auth)}`;
-      try {
-        const j2 = await (await fetch(api2)).json();
-        if (j2.result === 0) {
-          hit = { url: 'https://' + j2.hosts[0] + j2.path, exp: Date.now() + 5 * 60 * 1000 };
-          linkCache.set(key, hit);
-          up = await fetch(hit.url, { headers: h, redirect: 'follow' });
+
+    /* 配信元を順に当たり、駄目ならリンクを取り直してもう一巡。 */
+    const tried = [];
+    for (let round = 0; round < 2; round++) {
+      for (const u of hit.urls) {
+        let up;
+        try { up = await fetch(u, { headers: h, redirect: 'follow' }); }
+        catch (e) { tried.push(hostOf(u) + ':つながらない'); continue; }
+        if (up.ok || up.status === 206) {
+          const out = new Headers();
+          for (const k of ['content-length','content-range','accept-ranges','last-modified','etag']) {
+            const v = up.headers.get(k); if (v) out.set(k, v);
+          }
+          for (const [k, v] of Object.entries(CORS)) out.set(k, v);
+          if (!out.get('accept-ranges')) out.set('accept-ranges', 'bytes');
+          out.set('content-type', typeOf(u));
+          return new Response(up.body, { status: up.status, headers: out });
         }
-      } catch (e) { /* そのまま下へ */ }
+        tried.push(hostOf(u) + ':' + up.status);
+      }
+      if (round === 0) {
+        linkCache.delete(key);
+        const got = await fresh();
+        if (got.err) break;
+        hit = { urls: got.urls, exp: Date.now() + 5 * 60 * 1000 };
+        linkCache.set(key, hit);
+      }
     }
-    if (!up.ok && up.status !== 206) {
-      return json({ error: 'pCloud が中身を渡しません', status: up.status,
-                    hint: up.status === 410 ? 'リンクが要求元に紐づいている可能性' : '' }, 502);
-    }
-    const out = new Headers();
-    for (const k of ['content-type','content-length','content-range','accept-ranges','last-modified','etag']) {
-      const v = up.headers.get(k); if (v) out.set(k, v);
-    }
-    for (const [k, v] of Object.entries(CORS)) out.set(k, v);
-    if (!out.get('accept-ranges')) out.set('accept-ranges', 'bytes');
-    /* 種別は拡張子から決めて上書きする。pCloud が application/octet-stream を返すと
-       ブラウザが「対応していない音」と判断して鳴らさない。 */
-    out.set('content-type', typeOf(hit.url));
-    return new Response(up.body, { status: up.status, headers: out });
+    return json({ error: 'pCloud が中身を渡しません', tried,
+                  where: pub ? '公開リンク' : '直リンク',
+                  hint: 'リンクが要求元に縛られている可能性' }, 502);
   },
 };
 
+const hostOf = u => { try { return new URL(u).hostname.split('.')[0]; } catch (e) { return '?'; } };
 const TYPES = { mp3:'audio/mpeg', m4a:'audio/mp4', m4b:'audio/mp4', mp4:'audio/mp4',
                 aac:'audio/aac', flac:'audio/flac', wav:'audio/wav', ogg:'audio/ogg',
                 opus:'audio/ogg', aif:'audio/aiff', aiff:'audio/aiff', wma:'audio/x-ms-wma' };
@@ -102,7 +119,6 @@ function typeOf(u) {
   const ext = i > 0 ? name.slice(i + 1).toLowerCase() : '';
   return TYPES[ext] || 'audio/mpeg';
 }
-
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status, headers: { ...CORS, 'content-type': 'application/json; charset=utf-8' } });

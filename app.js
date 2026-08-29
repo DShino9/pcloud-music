@@ -63,6 +63,7 @@ const S = {
   genre:  LS.get('genre', ''),
   sort:   LS.get('sort', 'artist'),
   relay:  LS.get('relay', ''),      // 中継所のURL
+  pub:    LS.get('pub', false),     // 公開リンク経由にするか
   sweep:  null,
 };
 const saveMeta  = () => LS.set('meta', S.meta);
@@ -551,8 +552,8 @@ async function playAt(qi) {
     }
   } catch (e) {
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
-    const two = V.link === false;
-    toast(two ? '直リンクも読み出しも断られました（' + (e.code || '') + '）' : '曲の場所が分かりません: ' + (e.message || e), 5000);
+    toast('曲の場所が分かりません: ' + (e.message || e), 5000);
+    if (S.relay) diagnoseRelay(t);
     return;
   }
   try {
@@ -1040,7 +1041,7 @@ function keepBlob(id, url) {
 /* 曲の出どころを決める。手元 → 直リンク → api 経由の順。 */
 const relayUrl = (path, t) => S.relay.replace(/\/+$/, '') + path +
   '?fileid=' + encodeURIComponent(t.id) + '&host=' + encodeURIComponent(S.host) +
-  '&auth=' + encodeURIComponent(S.auth);
+  (S.pub ? '&pub=1' : '') + '&auth=' + encodeURIComponent(S.auth);
 
 /* 読めるかどうかは、実際に音として読ませてみるのが一番確か。
    fetch で試すと CORS で弾かれるだけで、再生できるかどうかは分からない
@@ -1740,8 +1741,10 @@ async function diagnoseRelay(t) {
     }
     try {
       const j = JSON.parse(txt);
-      L.push(j.error ? ('pCloud が断った: ' + (j.result || '') + ' ' + j.error)
-                     : ('リンクは取れた type=' + (j.type || 'なし')));
+      L.push(j.error ? ('断られた: ' + (j.result || '') + ' ' + j.error +
+                        (j.tried ? ' 試した配信元=' + j.tried.join(',') : ''))
+                     : ('リンクは取れた type=' + (j.type || 'なし') +
+                        (j.urls ? ' 配信元' + j.urls.length + '個' : '')));
     } catch (e) { L.push('JSON ではない: ' + txt.slice(0, 70)); }
   } catch (e) { shout('中継所につながりません', e.message || String(e)); return; }
 
@@ -1852,6 +1855,15 @@ function screenRelay() {
       ${S.relay ? '<button class="hbtn" id="rclr">やめる</button>' : ''}
     </div>
     <div class="msg" id="rm"></div>
+    <div style="height:18px"></div>
+    <div class="rowlist">
+      <button class="row" id="pub">
+        <span class="nm">公開リンクを使う（最後の手段）<br>
+          <span class="sub">直リンクが断られるときだけ。曲ごとに「リンクを知っていれば誰でも取得できる状態」を作ります</span></span>
+        <span class="chk ${S.pub ? 'on' : ''}">${S.pub ? '✓' : ''}</span>
+      </button>
+      <button class="row" id="pubclean"><span class="nm">作った公開リンクを全部消す</span><span class="sub">›</span></button>
+    </div>
     <div class="note" style="padding:14px 2px 0;line-height:1.9">
       <b>置き方</b><br>
       1. dash.cloudflare.com を開く（アカウントが無ければ作る）<br>
@@ -1884,6 +1896,21 @@ function screenRelay() {
   $('#rsave').onclick = test;
   $('#rl').onkeydown = e => { if (e.key === 'Enter') test(); };
   const c = $('#rclr'); if (c) c.onclick = () => { S.relay = ''; LS.del('relay'); screenRelay(); };
+  $('#pub').onclick = () => {
+    S.pub = !S.pub; LS.set('pub', S.pub); V.direct = null;
+    toast(S.pub ? '公開リンク経由にしました' : '公開リンクを使わない設定にしました');
+    screenRelay();
+  };
+  $('#pubclean').onclick = async () => {
+    $('#rm').className = 'msg'; $('#rm').textContent = '消しています…';
+    try {
+      const l = await api('listpublinks');
+      const links = l.publinks || [];
+      let n = 0;
+      for (const p of links) { try { await api('deletepublink', { linkid: p.linkid }); n++; } catch (e) {} }
+      $('#rm').className = 'msg ok'; $('#rm').textContent = n + ' 本消しました（全' + links.length + '本）';
+    } catch (e) { $('#rm').className = 'msg err'; $('#rm').textContent = '消せません: ' + (e.message || e); }
+  };
   $('#back').onclick = () => go('#/lib');
 }
 
@@ -1948,7 +1975,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v19');
+  L.push('版: v20');
+  L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
