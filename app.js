@@ -200,8 +200,9 @@ async function login(email, password, say = () => {}) {
 }
 
 function logout() {
-  ['auth', 'email', 'rootId', 'rootName', 'covers', 'offline'].forEach(LS.del);
-  Object.assign(S, { auth: '', email: '', rootId: null, rootName: '', albums: [], covers: {}, offline: {} });
+  ['auth', 'email', 'rootId', 'rootName', 'covers', 'offline', 'code', 'linkpw'].forEach(LS.del);
+  Object.assign(S, { auth: '', email: '', code: '', linkpw: '',
+                     rootId: null, rootName: '', albums: [], covers: {}, offline: {} });
 }
 
 /* ============ ライブラリ走査 ============ */
@@ -1707,7 +1708,10 @@ function screenMenu() {
       <button class="row" id="load"><span class="nm">索引を pCloud から取り込む</span></button>
       <button class="row" id="pick"><span class="nm">音楽フォルダを選び直す</span><span class="sub">${esc(S.rootName)}</span></button>
       <button class="row" id="clroff"><span class="nm">端末の音を全部消す</span><span class="sub">${n} 曲</span></button>
-      <button class="row" id="out"><span class="nm" style="color:var(--danger)">つなぎを切る</span><span class="sub">${esc(S.email)}</span></button>
+      ${S.auth ? `<button class="row" id="drop"><span class="nm">合鍵を捨てる<br>
+        <span class="sub">符号だけで足ります。合鍵は口座まるごとの鍵なので、要らないなら消す方が安全</span></span>
+        <span class="sub">›</span></button>` : ''}
+      <button class="row" id="out"><span class="nm" style="color:var(--danger)">つなぎを切る</span><span class="sub">${esc(S.email || (S.code ? '共有リンク' : ''))}</span></button>
     </div>
     <div class="note">ジャケットは iTunes と Deezer の公開API から取っています。無料・鍵不要で、
     1枚あたり0.3秒ほど。サイトを見て回らないので、待たされも費用もありません。</div>`;
@@ -1729,6 +1733,15 @@ function screenMenu() {
   $('#clroff').onclick = async () => {
     if ('caches' in window) await caches.delete('tracks-v1');
     S.offline = {}; saveOffline(); toast('消しました'); renderRoute();
+  };
+  const dr = $('#drop');
+  if (dr) dr.onclick = async () => {
+    if (!S.code) { toast('先に共有リンクを設定してください'); return; }
+    try { await api('logout'); } catch (e) {}       /* pCloud 側でも無効にする */
+    S.auth = ''; S.email = ''; LS.del('auth'); LS.del('email');
+    toast('合鍵を捨てました。以後は符号だけで動きます', 3500);
+    note('合鍵を捨てた');
+    screenMenu();
   };
   $('#out').onclick = () => { logout(); go('#/login'); location.reload(); };
   $('#back').onclick = () => go('#/lib');
@@ -1896,15 +1909,24 @@ function screenCode() {
       pCloud は合鍵で出したリンクを、ブラウザからだと弾きます（7010）。
       <b>共有リンクの符号なら弾かれません。</b>これが耳読が Mac 無しで鳴っている仕組みで、
       中継所も合鍵も要らなくなります。</div>
-    <div class="field"><label>音楽フォルダの共有リンク</label>
+    ${S.code ? `<div class="rowlist" style="margin-bottom:14px"><div class="row">
+      <span class="nm">いまの符号<br><span class="sub">${esc(S.code.slice(0,3))}••••••${esc(S.code.slice(-2))}
+      ${S.linkpw ? '・合言葉あり' : '・合言葉なし'}</span></span></div></div>` : ''}
+    <div class="field"><label>音楽フォルダの共有リンク${S.code ? '（変えるときだけ）' : ''}</label>
       <input id="cd" placeholder="https://u.pcloud.link/publink/show?code=…"
-        value="${esc(S.code)}" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+        autocapitalize="off" autocorrect="off" spellcheck="false"></div>
     <div class="field"><label>合言葉（掛けていなければ空のまま）</label>
-      <input id="cpw" type="password" value="${esc(S.linkpw)}" autocomplete="off"></div>
+      <input id="cpw" type="password" placeholder="${S.linkpw ? '設定済み。変えるときだけ' : ''}" autocomplete="off"></div>
     <button class="primary" id="ctest">つないで棚を読む</button>
     <div class="msg" id="cm"></div>
     ${S.code ? '<div style="height:10px"></div><button class="hbtn" id="cclr" style="width:100%;padding:10px;border-radius:10px">符号を忘れる</button>' : ''}
     <div class="note" style="padding:16px 2px 0;line-height:1.9">
+      <b>誰に何が見えるか</b><br>
+      ・このページを開いただけの人には<b>何も見えません</b>。符号はこの端末の中にだけあります<br>
+      ・<b>符号を知っている人は、音楽フォルダを開いて落とせます</b>。これは共有リンクの性質そのもの<br>
+      ・気になるなら pCloud 側で<b>リンクに合言葉</b>を掛け、上の欄に入れてください。
+        符号だけでは開けなくなります<br>
+      ・pCloud のリンク設定で<b>期限</b>も付けられます。切れたら作り直して貼り替えるだけです<br><br>
       <b>共有リンクの作り方</b><br>
       1. pCloud で <b>音楽</b> フォルダを右クリック → 共有 → リンクを取得<br>
       2. 出てきた URL をそのまま上に貼る<br><br>
@@ -1912,9 +1934,10 @@ function screenCode() {
       <b>pCloud 側でリンクに合言葉を掛けて</b>、それを下の欄に入れてください。
     </div>`;
   const run = async () => {
-    const { code, host } = parseCode($('#cd').value);
+    const typed = $('#cd').value.trim();
+    const { code, host } = typed ? parseCode(typed) : { code: S.code, host: null };
     if (!code) { $('#cm').className = 'msg err'; $('#cm').textContent = '符号が読み取れません'; return; }
-    const pw = $('#cpw').value;
+    const pw = $('#cpw').value || (typed ? '' : S.linkpw);
     const before = { code: S.code, pw: S.linkpw, host: S.host };
     S.code = code; S.linkpw = pw; if (host) S.host = host;
     $('#cm').className = 'msg'; $('#cm').textContent = '読んでいます…';
@@ -2081,7 +2104,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v21');
+  L.push('版: v22');
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
