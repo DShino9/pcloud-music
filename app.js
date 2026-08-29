@@ -5,6 +5,16 @@
 /* ============ 小道具 ============ */
 const $  = s => document.querySelector(s);
 const main = () => $('#main');
+/* 入口（worker）から配られているときは、pCloud の秘密はこちらに降りてこない。
+   一覧も曲の場所も入口に頼む。github.io から直接開いたときは従来どおり。 */
+const GATE = !/(^|\.)github\.io$/.test(location.hostname) && location.protocol === 'https:';
+async function gate(path) {
+  const r = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new PCloudError(j.result || -10, j.error || ('入口が ' + r.status));
+  return j;
+}
+
 const AUDIO_EXT = new Set(['mp3','m4a','aac','flac','wav','ogg','opus','aiff','aif','wma','m4b']);
 const IMAGE_EXT = new Set(['jpg','jpeg','png','webp','gif']);
 const COVER_NAMES = ['cover','folder','front','albumart','album','jacket','ジャケット'];
@@ -228,8 +238,9 @@ function walk(node, trail, out) {
 }
 async function scanLibrary(folderid) {
   /* 符号があれば、共有リンクの中身が丸ごと降ってくる。folderid も合鍵も要らない。 */
-  const r = S.code ? await apiPub('showpublink', { recursive: 1 })
-                   : await api('listfolder', { folderid, recursive: 1 });
+  const r = GATE ? await gate('/api/shelf')
+       : S.code ? await apiPub('showpublink', { recursive: 1 })
+                : await api('listfolder', { folderid, recursive: 1 });
   const out = [];
   walk(r.metadata, [], out);
   out.sort((a, b) => collator.compare(a.artist + a.name, b.artist + b.name));
@@ -553,6 +564,11 @@ async function fileLink(fileid) {
   if (hit && hit.exp > Date.now()) return hit.url;
   /* 合鍵で出す getfilelink は Origin で弾かれる（7010）。
      符号で出す getpublinkdownload は弾かれない。耳読と同じ道。 */
+  if (GATE) {
+    const g = await gate('/api/link?fileid=' + encodeURIComponent(fileid));
+    P.linkCache.set(fileid, { url: g.url, exp: Date.now() + 20 * 60 * 1000 });
+    return g.url;
+  }
   const r = S.code ? await apiPub('getpublinkdownload', { fileid, forcedownload: 0 })
                    : await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
   const url = 'https://' + r.hosts[0] + r.path;
@@ -613,7 +629,7 @@ async function playAt(qi) {
     const so = await trackSource(t);
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
-    au.crossOrigin = (V.ok && !so.local && so.cors !== false) ? 'anonymous' : null;
+    au.crossOrigin = (V.ok && !so.local && so.cors === true) ? 'anonymous' : null;
     if (so.relay) {
       /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
          通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
@@ -757,16 +773,16 @@ const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
             on:false, vi:0, raf:0 };
 const BANDS = 84;
 
-async function probeCors(fileid) {
-  if (V.cors !== null) return V.cors;
+/* いま鳴っている音そのものを読めるかで決める。
+   読めない音を解析器に通すと、ブラウザは音を消す（実機で踏んだ）。 */
+async function canAnalyse() {
+  const src = au.currentSrc || au.src || '';
+  if (!src) return false;
+  if (src.startsWith('blob:') || src.startsWith(location.origin)) return true;
   try {
-    const u = await fileLink(fileid);
-    const r = await fetch(u, { headers: { Range: 'bytes=0-1' } });
-    V.cors = r.ok || r.status === 206;
-  } catch (e) { V.cors = false; }
-
-  note('直に流した音を読めるか: ' + (V.cors ? 'はい' : 'いいえ'));
-  return V.cors;
+    const r = await fetch(src, { headers: { Range: 'bytes=0-1' }, referrerPolicy: 'no-referrer' });
+    return r.ok || r.status === 206;
+  } catch (e) { return false; }
 }
 function initGraph() {
   if (V.ctx) return V.ok;
@@ -1038,35 +1054,21 @@ function screenNow() {
   /* 解析はここで初めて繋ぐ。読めない音を通すと無音になるので、確かめてから。 */
   (async () => {
     const cc = cur(); if (!cc) return;
-    const tid = cc.al.tracks[cc.i].id;
-    /* api 経由で読んだ音は手元にあるので、解析はいつでも通る。 */
-    const local = !!(await cachedResponse(tid)) || blobs.has(tid) || !!S.relay;
-    const cached = local;
-    const ok = local ? true : await probeCors(tid);
-    if (!ok) {
+    if (V.ok) return;                       /* すでに繋がっている */
+    const src = au.currentSrc || au.src || '';
+    const own = src.startsWith('blob:') || src.startsWith(location.origin);
+    if (!own && !(await canAnalyse())) {
       $('#nmsg').className = 'msg';
-      $('#nmsg').innerHTML = '直に流している音は解析できません。<b>アルバムを「端末に入れる」と、全部の絵が動きます。</b>';
+      $('#nmsg').innerHTML = 'いまの流し方だと音を解析できません。' +
+        '<b>アルバムを「端末に入れる」と、全部の絵が動きます</b>（回転ジャケットは今も動きます）。';
+      note('解析しない（読めない音）');
       return;
     }
+    initGraph();
+    if (V.ctx && V.ctx.state === 'suspended') { try { await V.ctx.resume(); } catch (e) {} }
     if (!V.ok) {
-      /* いま鳴っている曲は CORS の印なしで読み込まれている。
-         そのまま解析器に繋ぐとブラウザが音を消すので、同じ位置で読み込み直す。 */
-      if (!cached) {
-        const pos = au.currentTime, wasPlaying = !au.paused, src = au.src;
-        au.crossOrigin = 'anonymous';
-        au.src = src;
-        au.addEventListener('loadedmetadata', function once() {
-          au.removeEventListener('loadedmetadata', once);
-          try { au.currentTime = pos; } catch (e) {}
-          if (wasPlaying) au.play().catch(() => {});
-        });
-      }
-      initGraph();
-      if (V.ctx && V.ctx.state === 'suspended') { try { await V.ctx.resume(); } catch (e) {} }
-      if (!V.ok) {
-        $('#nmsg').className = 'msg';
-        $('#nmsg').textContent = '解析器を作れませんでした。回転ジャケットなら動きます';
-      }
+      $('#nmsg').className = 'msg';
+      $('#nmsg').textContent = '解析器を作れませんでした。回転ジャケットなら動きます';
     }
   })();
 }
@@ -1186,7 +1188,9 @@ async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 符号があれば、ブラウザが pCloud から直に受け取れる。中継所も合鍵も要らない。 */
+  /* 入口ごしなら音も入口から取る。同じ場所から配られるので解析器に通せる
+     ＝ ビジュアライザーが全部動く。頭出しも効く。 */
+  if (GATE) return { url: '/api/audio?fileid=' + encodeURIComponent(t.id), local: true, cors: true };
   if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
   if (S.relay) return { url: null, relay: true, local: false, cors: true };
@@ -1823,7 +1827,7 @@ function screenMenu() {
       <button class="row" id="rescan"><span class="nm">棚を読み直す</span><span class="sub">${S.albums.length} アルバム</span></button>
       <button class="row" id="sweep"><span class="nm">ジャケットを一巡して探す</span><span class="sub">${c} 枚</span></button>
       <button class="row" id="sweepall"><span class="nm">自動で付けた分を探し直す</span></button>
-      <button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>
+      ${GATE ? `<button class="row" id="leave"><span class="nm">この端末を外す</span><span class="sub">合言葉を入れ直すまで</span></button>` : `<button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>`}
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
@@ -1846,7 +1850,8 @@ function screenMenu() {
     for (const [k, v] of Object.entries(S.covers)) if (!v.manual) delete S.covers[k];
     saveCovers(); go('#/lib'); setTimeout(() => sweepCovers(true), 60);
   };
-  $('#code').onclick   = () => go('#/code');
+  const lv = $('#leave'); if (lv) lv.onclick = () => { location.href = '/logout'; };
+  const cd2 = $('#code'); if (cd2) cd2.onclick = () => go('#/code');
   $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
   $('#meta').onclick  = () => sweepMeta();
@@ -1874,7 +1879,7 @@ function screenMenu() {
 
 function renderRoute() {
   const h = location.hash || '';
-  if (!S.auth && !S.code) {
+  if (!GATE && !S.auth && !S.code) {
     if (h && h !== '#/login') {
       note('合鍵が無いのでログイン画面に戻した（' + h + '）');
       lastMsg = { text: '合鍵が残らなかったので、もう一度お願いします', cls: 'err' };
@@ -1895,7 +1900,7 @@ function renderRoute() {
   if (h === '#/smart')           return screenSmart();
   if (h === '#/lists')           return screenLists();
   if (h === '#/history')         return screenHistory();
-  if (!S.rootId && !S.code) return screenPick(0);
+  if (!S.rootId && !S.code && !GATE) return screenPick(0);
   return screenLib();
 }
 $('#btnMenu').onclick   = () => go('#/menu');
@@ -2229,13 +2234,13 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v26');
+  L.push('版: v27');
+  L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
-  L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
   L.push('― できごと ―');
   L.push(readLog());
