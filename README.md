@@ -31,6 +31,33 @@ Mac も要らない（GitHub Pages に置いた HTML と iPhone だけで完結�
 選んだ1枚は索引に URL で持ち、必要なら `cover.jpg` としてアルバムフォルダに置く
 （他のプレイヤーもこの名前を拾うため）。
 
+
+## 中継所を置く（音を鳴らすのに必要）
+
+**pCloud は、ブラウザから直接だと音のリンクを出しません。** `getfilelink` /
+`getaudiolink` / `getvideolink` はいずれも `7010 Invalid link referer` を返す。
+参照元を消しても断られるので、ブラウザが必ず送る `Origin` を見ている。
+つまり **pcloud.com 以外に置いたページからは原理的に取れない**（pCloud 公式も明記）。
+`file_open` は未ログインでも `2003` を返すので、こちらも使えない。
+
+サーバーから呼べば `Origin` も `Referer` も付かないので普通に通る。
+そのための中継所が `worker.js`。
+
+1. dash.cloudflare.com → Workers & Pages → Create → Start with Hello World → Deploy
+2. Edit code を開き、中身を全部消して `worker.js` を貼る → Deploy
+3. 出てきた `…workers.dev` の URL を、アプリの ⋯ → 中継所 に入れる
+
+無料枠で足りる。中継所は pCloud の合鍵を受け取るが、記録は残さない。
+`host` は `api.pcloud.com` / `eapi.pcloud.com` 以外を弾くので、
+他人に勝手な中継として使われることはない。
+
+| 経路 | 状況 |
+|---|---|
+| `checksumfile` / `stat` / `listfolder` | ○ ブラウザから直接通る |
+| `getfilelink` ほかリンク発行 | × 7010（Origin で弾かれる） |
+| `file_open` / `file_read` | × 2003（HTTP API では使えない） |
+| 中継所経由 | ○ 頭出しも解析も通る |
+
 ## 手元で動かす
 
     python3 -m http.server 8788

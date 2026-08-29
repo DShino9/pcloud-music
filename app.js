@@ -62,6 +62,7 @@ const S = {
   filter: LS.get('filter', 'all'),
   genre:  LS.get('genre', ''),
   sort:   LS.get('sort', 'artist'),
+  relay:  LS.get('relay', ''),      // 中継所のURL
   sweep:  null,
 };
 const saveMeta  = () => LS.set('meta', S.meta);
@@ -529,7 +530,7 @@ async function playAt(qi) {
     const so = await trackSource(t);
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
-    au.crossOrigin = (V.ok && !so.local) ? 'anonymous' : null;
+    au.crossOrigin = (V.ok && !so.local && so.cors !== false) ? 'anonymous' : null;
     src = so.url;
   } catch (e) {
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
@@ -912,7 +913,7 @@ function screenNow() {
     const cc = cur(); if (!cc) return;
     const tid = cc.al.tracks[cc.i].id;
     /* api 経由で読んだ音は手元にあるので、解析はいつでも通る。 */
-    const local = !!(await cachedResponse(tid)) || blobs.has(tid) || V.link === false;
+    const local = !!(await cachedResponse(tid)) || blobs.has(tid) || !!S.relay;
     const cached = local;
     const ok = local ? true : await probeCors(tid);
     if (!ok) {
@@ -975,6 +976,11 @@ const mimeOf = name => MIME[ext(name)] || 'audio/mpeg';
    その場合は api 経由で中身を丸ごと読む。こちらは制限を受けず、
    手元に落ちるぶん解析器にも通せる（＝ビジュアライザーが確実に動く）。 */
 async function fetchTrackBytes(fileid, name, onProgress) {
+  if (S.relay) {
+    const r = await fetch(relayUrl('/audio', { id: fileid }), { referrerPolicy: 'no-referrer' });
+    if (r.ok) return r;
+    throw new PCloudError(-8, '中継所から取れません（HTTP ' + r.status + '）');
+  }
   try {
     const r = await fetch(await fileLink(fileid), { referrerPolicy: 'no-referrer' });
     if (r.ok) return r;
@@ -1014,10 +1020,16 @@ function keepBlob(id, url) {
   }
 }
 /* 曲の出どころを決める。手元 → 直リンク → api 経由の順。 */
+const relayUrl = (path, t) => S.relay.replace(/\/+$/, '') + path +
+  '?fileid=' + encodeURIComponent(t.id) + '&host=' + encodeURIComponent(S.host) +
+  '&auth=' + encodeURIComponent(S.auth);
+
 async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
+  /* 中継所があればそこから流す。頭出しもでき、解析器にも通せる。 */
+  if (S.relay) return { url: relayUrl('/audio', t), local: false, cors: true };
   if (V.link !== false) {
     try {
       const u = await fileLink(t.id);
@@ -1602,6 +1614,7 @@ function screenMenu() {
       <button class="row" id="rescan"><span class="nm">棚を読み直す</span><span class="sub">${S.albums.length} アルバム</span></button>
       <button class="row" id="sweep"><span class="nm">ジャケットを一巡して探す</span><span class="sub">${c} 枚</span></button>
       <button class="row" id="sweepall"><span class="nm">自動で付けた分を探し直す</span></button>
+      <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
@@ -1620,6 +1633,7 @@ function screenMenu() {
     for (const [k, v] of Object.entries(S.covers)) if (!v.manual) delete S.covers[k];
     saveCovers(); go('#/lib'); setTimeout(() => sweepCovers(true), 60);
   };
+  $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
   $('#meta').onclick  = () => sweepMeta();
   $('#lists').onclick = () => go('#/lists');
@@ -1652,6 +1666,7 @@ function renderRoute() {
   if (h === '#/now')             return screenNow();
   if (h === '#/vis')             return screenVis();
   if (h === '#/routes')          return screenRoutes();
+  if (h === '#/relay')           return screenRelay();
   if (h === '#/queue')           return screenQueue();
   if (h === '#/smart')           return screenSmart();
   if (h === '#/lists')           return screenLists();
@@ -1723,6 +1738,58 @@ async function probeRoutes(withPublink) {
   return L.join('\n');
 }
 
+function screenRelay() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '中継所';
+  $('#btnCovers').classList.add('hide');
+  main().innerHTML = `
+    <div class="note" style="padding:0 2px 14px">pCloud は、ブラウザから直接だと音のリンクを出しません
+      （<b>pcloud.com 以外の場所からは原理的に取れない</b>仕組みです）。
+      サーバーから頼めば普通に出るので、あなたの中継所を1つ置いてそこ経由にします。
+      置き方は下に。無料枠で足ります。</div>
+    <div class="field"><label>中継所のURL</label>
+      <input id="rl" placeholder="https://ongakudana.○○○.workers.dev"
+        value="${esc(S.relay)}" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div class="setrow" style="display:flex;gap:8px">
+      <button class="primary" id="rsave" style="flex:1">覚えて試す</button>
+      ${S.relay ? '<button class="hbtn" id="rclr">やめる</button>' : ''}
+    </div>
+    <div class="msg" id="rm"></div>
+    <div class="note" style="padding:14px 2px 0;line-height:1.9">
+      <b>置き方</b><br>
+      1. dash.cloudflare.com を開く（アカウントが無ければ作る）<br>
+      2. Workers &amp; Pages → Create → Start with Hello World → Deploy<br>
+      3. Edit code を開き、中身を全部消して <b>worker.js</b> の中身を貼る → Deploy<br>
+      4. 出てきた <b>…workers.dev</b> のURLをここに入れる<br><br>
+      中継所には pCloud の合鍵が渡ります（あなたのものです）。記録は残さない作りにしてあります。
+    </div>`;
+  const test = async () => {
+    const v = $('#rl').value.trim().replace(/\/+$/, '');
+    if (!v) return;
+    $('#rm').className = 'msg'; $('#rm').textContent = '試しています…';
+    try {
+      const r = await fetch(v + '/', { referrerPolicy: 'no-referrer' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      S.relay = v; LS.set('relay', v);
+      /* 実際に1曲ぶんの頭を取ってみる */
+      const al = S.albums.find(a => a.tracks.length);
+      if (al) {
+        const rr = await fetch(relayUrl('/link', al.tracks[0]), { referrerPolicy: 'no-referrer' });
+        const j = await rr.json();
+        if (!j.url) throw new Error(j.error || 'リンクを取れません');
+      }
+      $('#rm').className = 'msg ok'; $('#rm').textContent = '通りました。これで聴けます';
+      note('中継所が通った: ' + v);
+    } catch (e) {
+      $('#rm').className = 'msg err'; $('#rm').textContent = '駄目でした: ' + (e.message || e);
+    }
+  };
+  $('#rsave').onclick = test;
+  $('#rl').onkeydown = e => { if (e.key === 'Enter') test(); };
+  const c = $('#rclr'); if (c) c.onclick = () => { S.relay = ''; LS.del('relay'); screenRelay(); };
+  $('#back').onclick = () => go('#/lib');
+}
+
 function screenRoutes() {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = '取り出し方を調べる';
@@ -1784,7 +1851,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v14');
+  L.push('版: v15');
+  L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
