@@ -972,13 +972,18 @@ function screenNow() {
     </div>`;
   const cv = $('#vcv'), ctx = cv.getContext('2d');
   const paint = () => {
-    const cc = cur(); if (!cc) return;
-    $('#nti').textContent = trackTitle(cc.al.tracks[cc.i]);
-    $('#nar').textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
-    $('#nar').style.cursor = 'pointer';
-    $('#nar').onclick = () => go('#/album/' + cc.al.id);
-    $('#vname').textContent = (VIS[list[V.vi]] || VIS.disc)[0] + `（${V.vi + 1}/${list.length}・画面を触ると切り替え）`;
-    $('#nplay').textContent = au.paused ? '▶' : '⏸';
+    const cc = cur(), el = $('#nti');
+    /* 画面を離れた後も呼ばれることがある。要素が無ければ何もしない。 */
+    if (!cc || !el) return;
+    el.textContent = trackTitle(cc.al.tracks[cc.i]);
+    const ar = $('#nar'), vn = $('#vname'), pl = $('#nplay');
+    if (ar) {
+      ar.textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
+      ar.style.cursor = 'pointer';
+      ar.onclick = () => go('#/album/' + cc.al.id);
+    }
+    if (vn) vn.textContent = (VIS[list[V.vi]] || VIS.disc)[0] + `（${V.vi + 1}/${list.length}・画面を触ると切り替え）`;
+    if (pl) pl.textContent = au.paused ? '▶' : '⏸';
   };
   paint();
   const fit = () => {
@@ -1017,10 +1022,19 @@ function screenNow() {
   $('#nq').onclick     = () => go('#/queue');
   $('#nalb').onclick   = () => { const c2 = cur(); if (c2) go('#/album/' + c2.al.id); };
   $('#npick').onclick  = () => go('#/vis');
+  /* 画面を開くたびに見張りを足していたので、離れた後も呼ばれて落ちていた。
+     前の分を必ず外してから足す。 */
+  if (V.watch) {
+    au.removeEventListener('play', V.watch.p); au.removeEventListener('pause', V.watch.p);
+    au.removeEventListener('timeupdate', V.watch.t);
+    removeEventListener('resize', V.watch.f);
+  }
+  const onTime = () => {
+    const b = $('#nseek'); if (b && au.duration) b.style.width = (au.currentTime / au.duration * 100) + '%';
+  };
+  V.watch = { p: paint, t: onTime, f: fit };
   au.addEventListener('play', paint); au.addEventListener('pause', paint);
-  au.addEventListener('timeupdate', () => {
-    const b = $('#nseek'); if (b && au.duration) b.style.width = (au.currentTime/au.duration*100)+'%';
-  });
+  au.addEventListener('timeupdate', onTime);
   /* 解析はここで初めて繋ぐ。読めない音を通すと無音になるので、確かめてから。 */
   (async () => {
     const cc = cur(); if (!cc) return;
@@ -2215,7 +2229,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v25');
+  L.push('版: v26');
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
