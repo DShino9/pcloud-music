@@ -92,13 +92,14 @@ const thumbUrl = (fileid, px) =>
   'https://' + S.host + '/getthumb?fileid=' + fileid + '&size=' + px + 'x' + px +
   '&crop=1&type=auto&auth=' + encodeURIComponent(S.auth);
 
-async function login(email, password) {
+async function login(email, password, say = () => {}) {
   if (!(window.crypto && crypto.subtle)) {
     throw new PCloudError(-5, 'この開き方では暗号が使えません。https:// で開いてください');
   }
   let lastErr = null;
   for (const host of ['api.pcloud.com', 'eapi.pcloud.com']) {
     try {
+      say(host + ' に問い合わせています…');
       const dg = await api('getdigest', {}, host);
       const pd = await sha1hex(password + (await sha1hex(email.toLowerCase())) + dg.digest);
       const r = await api('userinfo',
@@ -520,17 +521,25 @@ function screenLogin() {
         <input id="pw" type="password" autocomplete="current-password"></div>
       <button class="primary" id="go">つなぐ</button>
       <div class="msg" id="m"></div>
+      <button class="hbtn" id="diag" style="margin-top:14px;width:100%;padding:9px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);font-size:12.5px;color:var(--dim)">つながりを調べる</button>
+      <pre id="diagout" class="hide" style="white-space:pre-wrap;font-size:11.5px;color:var(--dim);background:#0c0c10;border:1px solid var(--line);border-radius:9px;padding:11px;margin-top:10px;line-height:1.7"></pre>
       <div class="note">パスワードはこの端末の中でだけ使われ、保存されません。
       pCloud へ送られるのは、パスワードそのものではなく毎回変わる符丁です。
       以後この端末には接続用の合鍵だけが残ります。</div>
     </div>`;
+  const say = (t, cls) => { const m = $('#m'); if (m) { m.className = 'msg' + (cls ? ' ' + cls : ''); m.textContent = t; } };
   const run = async () => {
     const em = $('#em').value.trim(), pw = $('#pw').value;
-    if (!em || !pw) return;
-    $('#go').disabled = true; $('#m').className = 'msg'; $('#m').textContent = 'つないでいます…';
+    /* 黙って帰らない。押して何も起きないのが一番困る。 */
+    if (!em && !pw) return say('メールアドレスとパスワードを入れてください', 'err');
+    if (!em) return say('メールアドレスが空です', 'err');
+    if (!pw) return say('パスワードが空です', 'err');
+    $('#go').disabled = true;
+    say('符丁を作っています…');
     try {
-      await login(em, pw);
+      await login(em, pw, say);
       $('#pw').value = '';
+      say('入れました。棚を開きます…', 'ok');
       go(S.rootId ? '#/lib' : '#/pick/0');
     } catch (e) {
       $('#m').className = 'msg err';
@@ -541,6 +550,11 @@ function screenLogin() {
   };
   $('#go').onclick = run;
   $('#pw').onkeydown = e => { if (e.key === 'Enter') run(); };
+  $('#em').onkeydown = e => { if (e.key === 'Enter') $('#pw').focus(); };
+  $('#diag').onclick = async () => {
+    const o = $('#diagout'); o.classList.remove('hide'); o.textContent = '調べています…';
+    try { o.textContent = await selftest(); } catch (e) { o.textContent = '調べられません: ' + (e.message || e); }
+  };
 }
 
 async function screenPick(folderid) {
@@ -761,6 +775,44 @@ function renderRoute() {
 }
 $('#btnMenu').onclick   = () => go('#/menu');
 $('#btnCovers').onclick = () => sweepCovers(true);
+
+/* ============ 何があっても黙らせない ============ */
+/* 押しても何も出ない、が一番困る。拾えなかった失敗は画面の下に出す。 */
+function shout(what, detail) {
+  let b = document.getElementById('shout');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'shout';
+    b.style.cssText = 'position:fixed;left:10px;right:10px;bottom:10px;z-index:99;background:#3a1f22;' +
+      'border:1px solid #6b3238;color:#f0d5d7;padding:11px 13px;border-radius:11px;font-size:12px;' +
+      'line-height:1.6;word-break:break-word;max-height:42vh;overflow:auto';
+    b.onclick = () => b.remove();
+    document.body.appendChild(b);
+  }
+  b.textContent = what + ': ' + detail + '（触ると消えます）';
+}
+window.addEventListener('error', e => shout('落ちました', (e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || '')));
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason || {};
+  shout('拾えなかった失敗', (r.code != null ? 'code=' + r.code + ' ' : '') + (r.message || String(r)));
+});
+
+/* 何が使えて何が駄目かを、画面だけで確かめられるようにする。 */
+async function selftest() {
+  const L = [];
+  L.push('開き方: ' + location.protocol + '//' + location.host);
+  L.push('暗号(crypto.subtle): ' + (window.crypto && crypto.subtle ? 'ある' : '★ない'));
+  L.push('控え(Cache Storage): ' + ('caches' in window ? 'ある' : 'ない'));
+  try { localStorage.setItem('pm.t', '1'); localStorage.removeItem('pm.t'); L.push('端末の記憶: 書ける'); }
+  catch (e) { L.push('端末の記憶: ★書けない（' + e.name + '）'); }
+  for (const h of ['api.pcloud.com', 'eapi.pcloud.com']) {
+    const t = Date.now();
+    try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
+    catch (e) { L.push(h + ': ★' + (e.message || e)); }
+  }
+  L.push('版: v3');
+  return L.join('\n');
+}
 
 /* ============ 起動 ============ */
 if ('serviceWorker' in navigator) {
