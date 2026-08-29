@@ -1678,25 +1678,44 @@ function renderRoute() {
 $('#btnMenu').onclick   = () => go('#/menu');
 $('#btnCovers').onclick = () => sweepCovers(true);
 
-/* 中継所が返しているものを見て、何が起きているかを言い当てる。 */
+/* 中継所が返しているものを、実際に取って見る。推測で往復しないため。 */
 async function diagnoseRelay(t) {
+  const L = [];
   try {
     const r = await fetch(relayUrl('/link', t), { referrerPolicy: 'no-referrer' });
-    const ct = r.headers.get('content-type') || '';
-    const body = (await r.text()).slice(0, 160);
-    note('中継所の返事 ' + r.status + ' ' + ct + ' / ' + body.slice(0, 60));
-    if (/Hello World/i.test(body)) {
+    const ct = r.headers.get('content-type') || '(種別なし)';
+    const txt = await r.text();
+    L.push('/link ' + r.status + ' ' + ct);
+    if (/Hello World/i.test(txt)) {
       shout('中継所', '中身がまだ Hello World のままです。貼り替えて Deploy し直してください');
-    } else if (!ct.includes('json')) {
-      shout('中継所', r.status + ' ' + ct + ' — ' + body);
-    } else {
-      const j = JSON.parse(body);
-      if (j.error) shout('中継所ごしに pCloud が断りました', (j.result || '') + ' ' + j.error);
-      else shout('中継所', 'リンクは取れています（' + (j.type || '') + '）。音として読めないのは別の理由です');
+      return;
     }
-  } catch (e) {
-    shout('中継所につながりません', e.message || String(e));
-  }
+    try {
+      const j = JSON.parse(txt);
+      L.push(j.error ? ('pCloud が断った: ' + (j.result || '') + ' ' + j.error)
+                     : ('リンクは取れた type=' + (j.type || 'なし')));
+    } catch (e) { L.push('JSON ではない: ' + txt.slice(0, 70)); }
+  } catch (e) { shout('中継所につながりません', e.message || String(e)); return; }
+
+  /* 音そのものを100バイトだけ取って、何が返っているかを見る。 */
+  try {
+    const r2 = await fetch(relayUrl('/audio', t),
+      { headers: { Range: 'bytes=0-99' }, referrerPolicy: 'no-referrer' });
+    const ct2 = r2.headers.get('content-type') || '(種別なし)';
+    const buf = await r2.arrayBuffer();
+    L.push('/audio ' + r2.status + ' ' + ct2 + ' ' + buf.byteLength + 'バイト');
+    const b = new Uint8Array(buf.slice(0, 6));
+    const hex = [...b].map(x => x.toString(16).padStart(2, '0')).join(' ');
+    const asc = [...b].map(x => (x >= 32 && x < 127) ? String.fromCharCode(x) : '.').join('');
+    L.push('先頭 ' + hex + ' 「' + asc + '」');
+    if (asc.startsWith('ID3') || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) L.push('→ mp3 の中身です');
+    else if (asc.includes('ftyp')) L.push('→ m4a の中身です');
+    else if (asc.startsWith('fLaC')) L.push('→ flac の中身です');
+    else if (asc.startsWith('{') || asc.startsWith('<')) L.push('→ 音ではなく文字が返っています');
+  } catch (e) { L.push('/audio 取得失敗: ' + (e.message || e)); }
+
+  note('中継所診断: ' + L.join(' / '));
+  shout('中継所', L.join('  /  '));
 }
 
 /* ============ 取り出し方を総当たりする ============ */
@@ -1873,7 +1892,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v16');
+  L.push('版: v17');
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));

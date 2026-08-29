@@ -1,6 +1,6 @@
 /* 画面そのものを端末に置く。曲の実体は app.js が別の入れ物（tracks-v1）に持つ。 */
-const SHELL = 'shell-v17';
-const FILES = ['./', './index.html', './app.js?v=16', './manifest.webmanifest', './icon-192.png', './icon-180.png', './icon-512.png'];
+const SHELL = 'shell-v18';
+const FILES = ['./', './index.html', './app.js?v=17', './manifest.webmanifest', './icon-192.png', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
