@@ -119,7 +119,12 @@ async function login(email, password, say = () => {}) {
       /* 返事が result 0 でも合鍵が入っていないことがある。
          ここで黙って先に進むと、画面の振り分けが「未ログイン」と判断して
          ログイン画面を組み直し、入力も文字も消えて無言になる（実際に起きた）。 */
-      if (!r.auth) throw new PCloudError(-6, 'pCloud が合鍵を返しませんでした');
+      if (!r.auth) {
+        /* result 0 なのに合鍵が無い。何が返ってきたのかを名前だけ控える（値は残さない）。 */
+        const keys = Object.keys(r).join(', ');
+        note('合鍵なし。返ってきた項目: ' + keys);
+        throw new PCloudError(-6, 'pCloud が合鍵を返しませんでした。返ってきた項目: ' + keys);
+      }
       S.host = host; S.auth = r.auth; S.email = r.email || email;
       LS.set('host', host); LS.set('auth', r.auth); LS.set('email', S.email);
       return r;
@@ -840,7 +845,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v5');
+  L.push('版: v6');
   L.push('');
   L.push('― できごと ―');
   L.push(readLog());
