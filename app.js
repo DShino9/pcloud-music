@@ -388,17 +388,17 @@ const latinish = s => {
   if (!t) return true;
   return (t.match(/[A-Za-z]/g) || []).length / t.length > 0.6;
 };
-async function findCandidates(term, al) {
+async function findCandidates(term, al, wide) {
   const seen = new Set();
   let out = [];
   const add = arr => { for (const c of arr) if (!seen.has(c.label)) { seen.add(c.label); out.push(c); } };
   const best = () => (al ? ((rank(out, al)[0] || {}).score || 0) : (out.length ? 1 : 0));
   const first = latinish(term) ? 'US' : 'JP', second = first === 'US' ? 'JP' : 'US';
 
-  try { add(await itunesSearch(term, 15, first)); } catch (e) {}
-  if (best() < SURE) { try { add(await itunesSearch(term, 15, second)); } catch (e) {} }
-  if (best() < SURE) add(await deezerSearch(term, 8));
-  return (al ? rank(out, al) : out).slice(0, 10);
+  try { add(await itunesSearch(term, 20, first)); } catch (e) {}
+  if (best() < SURE || wide) { try { add(await itunesSearch(term, 20, second)); } catch (e) {} }
+  if (best() < SURE || wide) add(await deezerSearch(term, 15));
+  return (al ? rank(out, al) : out).slice(0, 24);
 }
 
 /* 棚ぜんぶを一巡する。止めても続きから。費用は 0 円。
@@ -528,7 +528,7 @@ function albumSheet(al) {
      [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
       () => { toggleFav('a' + al.id); renderRoute(); }],
      ['💿', 'アルバムを開く', () => go('#/album/' + al.id)],
-     ['🖼', 'ジャケットを選び直す', () => go('#/cover/' + al.id)],
+     ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
      [albumOffline(al) ? '🗑' : '↓', albumOffline(al) ? '端末から消す' : '端末に入れる',
       () => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al))]]);
 }
@@ -1654,70 +1654,111 @@ function buildSmart() {
   return refs.slice(0, SMART.n);
 }
 
+/* ジャケットの選び直し。違うものが付く前提で、直しやすさを最優先にする。 */
 async function screenCover(id) {
   const al = S.albums.find(a => String(a.id) === String(id));
   if (!al) { go('#/lib'); return; }
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = 'ジャケットを選ぶ';
   $('#btnCovers').classList.add('hide');
-  const cur = S.covers[al.id] || {};
-  const q = cur.q || albumQuery(al);
+  const cur0 = S.covers[al.id] || {};
+  const me = parseAlbum(al);
+  /* 探し方の当て方を変える札。1回で当たらないときはここを押す。 */
+  const chips = [
+    ['そのまま', albumQuery(al)],
+    ['アルバム名だけ', me.album],
+    ['アーティストだけ', me.artist],
+    ['英語表記で', (me.artist + ' ' + me.album).replace(/[ぁ-んァ-ヶ一-龠]/g, '').trim()],
+    ['album を足す', albumQuery(al) + ' album'],
+  ].filter(c => c[1] && c[1].length > 1);
+  let q = cur0.q || albumQuery(al);
+  const iffy = S.albums.filter(x => { const c = S.covers[x.id]; return c && !c.manual && c.sure === false; });
+  const nextIffy = iffy.find(x => String(x.id) !== String(al.id));
+
   const draw = (cands, loading) => {
+    const c0 = S.covers[al.id] || {};
     main().innerHTML = `
-      <div class="crumb">${esc(al.artist)} / ${esc(al.name)}</div>
+      <div class="albumhead" style="margin-bottom:12px">
+        <div class="cov">${c0.url ? `<img src="${esc(c0.url)}">` : '<span class="ph">♪</span>'}</div>
+        <div class="meta">
+          <h2>${esc(al.name)}</h2>
+          <div class="a">${esc(al.artist)} · ${al.tracks.length}曲</div>
+          <div class="a">${c0.url ? 'いま: ' + esc(c0.src || '手動') + (c0.score != null ? '（' + Math.round(c0.score * 100) + '%）' : '') : 'まだ付いていません'}</div>
+          <div class="acts">
+            ${c0.url ? '<button class="hbtn" id="clr">外す</button>' : ''}
+            ${al.folderCover ? '<button class="hbtn" id="usefolder">フォルダの画像</button>' : ''}
+            <button class="hbtn" id="pick">端末の画像</button>
+            ${nextIffy ? `<button class="hbtn" id="nextiffy">次の要確認 ›</button>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="chips">${chips.map((c, i) =>
+        `<button class="hbtn" data-c="${i}">${esc(c[0])}</button>`).join('')}</div>
       <div class="searchrow"><input id="q" value="${esc(q)}"><button class="hbtn" id="rs">探す</button></div>
-      ${cur.url ? `<div style="margin-top:14px"><div class="a" style="font-size:12px;color:var(--dim);margin-bottom:6px">いま使っているもの（${esc(cur.src || '手動')}）</div>
-        <img src="${esc(cur.url)}" style="width:120px;border-radius:9px"></div>` : ''}
+      <input id="url" placeholder="画像のURLを貼る" style="width:100%;margin-top:8px;padding:10px 12px;border-radius:10px;background:#0c0c10;border:1px solid var(--line);color:var(--fg)">
+      <input id="file" type="file" accept="image/*" class="hide">
       ${loading ? '<div class="empty">探しています…</div>' : `
       <div class="cands">${cands.map((c, i) => `
-        <button class="cand ${cur.url === c.url ? 'sel' : ''}" data-i="${i}">
+        <button class="cand ${c0.url === c.url ? 'sel' : ''}" data-i="${i}">
           <img loading="lazy" src="${esc(c.thumb || c.url)}" onerror="this.closest('.cand').style.display='none'">
           <div class="cl">${esc(c.label)}<br>${esc(c.src)}${c.n ? ' ' + c.n + '曲' : ''}${c.score != null ? ' ・ ' + Math.round(c.score * 100) + '%' : ''}</div>
-        </button>`).join('') || '<div class="empty">候補がありません。言葉を変えて探し直してください。</div>'}</div>`}
-      <div style="height:16px"></div>
-      <div class="rowlist">
-        ${al.folderCover ? `<button class="row" id="usefolder"><span class="nm">フォルダにある画像を使う</span></button>` : ''}
-        <button class="row" id="push"><span class="nm">選んだ1枚を pCloud のこのフォルダに cover.jpg として置く</span></button>
-        ${cur.url ? `<button class="row" id="clr"><span class="nm" style="color:var(--danger)">ジャケットを外す</span></button>` : ''}
-      </div>
-      <div class="note" style="padding:0 2px">選ばなかった候補は端末にもクラウドにも残しません。
-      あとで選び直せるよう、候補の在り処だけ索引に控えます。</div>`;
+        </button>`).join('') || '<div class="empty">候補がありません。上の札か言葉を変えてください。</div>'}</div>`}
+      <div class="note" style="padding:14px 2px 0">選ばなかった候補は残しません。
+        あとで選び直せるよう、探した言葉だけ控えます。</div>`;
+
+    const put = (url, src) => {
+      S.covers[al.id] = { url, src, q: ($('#q') || {}).value || q, manual: true, sure: true,
+                          score: (S.covers[al.id] || {}).score };
+      saveCovers();
+      if (LS.full) toast('★端末の記憶が一杯です。索引を pCloud に控えてください', 4000);
+      else toast('決めました');
+    };
     main().querySelectorAll('.cand').forEach(b => b.onclick = () => {
       const c = cands[+b.dataset.i];
-      S.covers[al.id] = { url: c.url, src: c.src, q: $('#q').value, cands, manual: true, sure: true };
+      put(c.url, c.src);
       if (c.g || c.y) { S.meta[al.id] = { g: c.g || '', y: c.y || '' }; saveMeta(); }
-      saveCovers(); toast('決めました'); go('#/album/' + al.id);
+      nextIffy ? go('#/cover/' + nextIffy.id) : go('#/album/' + al.id);
     });
-    const rs = $('#rs'); if (rs) rs.onclick = async () => {
+    main().querySelectorAll('[data-c]').forEach(b => b.onclick = async () => {
+      q = chips[+b.dataset.c][1];
       draw([], true);
-      const c = await findCandidates($('#q') ? $('#q').value : q, al);
-      cur.q = q; draw(c, false);
+      draw(await findCandidates(q, al, true), false);
+    });
+    $('#rs').onclick = async () => {
+      q = $('#q').value; draw([], true); draw(await findCandidates(q, al, true), false);
+    };
+    $('#url').onchange = () => {
+      const v = $('#url').value.trim();
+      if (/^https?:\/\//.test(v)) { put(v, '手動'); go('#/album/' + al.id); }
+    };
+    $('#pick').onclick = () => $('#file').click();
+    $('#file').onchange = e => {
+      const f = e.target.files && e.target.files[0]; if (!f) return;
+      const im = new Image();
+      im.onload = () => {
+        /* 端末に抱えるので小さくする。1500枚ぶん貯めても溢れない大きさに。 */
+        const n = 400, cv = document.createElement('canvas');
+        cv.width = cv.height = n;
+        const x = cv.getContext('2d');
+        const s2 = Math.min(im.width, im.height);
+        x.drawImage(im, (im.width - s2) / 2, (im.height - s2) / 2, s2, s2, 0, 0, n, n);
+        put(cv.toDataURL('image/jpeg', 0.82), '端末の画像');
+        go('#/album/' + al.id);
+      };
+      im.onerror = () => toast('その画像は読めません');
+      im.src = URL.createObjectURL(f);
     };
     const uf = $('#usefolder'); if (uf) uf.onclick = () => {
-      S.covers[al.id] = { url: thumbUrl(al.folderCover, 600), src: 'フォルダ', q, cands: [], manual: true };
-      saveCovers(); go('#/album/' + al.id);
+      put(thumbUrl(al.folderCover, 600), 'フォルダ'); go('#/album/' + al.id);
     };
-    const clr = $('#clr'); if (clr) clr.onclick = () => { delete S.covers[al.id]; saveCovers(); go('#/album/' + al.id); };
-    $('#push').onclick = async () => {
-      const c = S.covers[al.id];
-      if (!c) { toast('先に1枚選んでください'); return; }
-      try {
-        const blob = await (await fetch(c.url)).blob();
-        const fd = new FormData(); fd.append('file', blob, 'cover.jpg');
-        const u = new URL('https://' + S.host + '/uploadfile');
-        u.searchParams.set('auth', S.auth); u.searchParams.set('folderid', al.id);
-        u.searchParams.set('filename', 'cover.jpg'); u.searchParams.set('nopartial', 1);
-        const j = await (await fetch(u, { method: 'POST', body: fd })).json();
-        toast(j.result === 0 ? 'cover.jpg を置きました' : '置けません: ' + j.error);
-      } catch (e) { toast('置けません: ' + e.message); }
-    };
+    const cl = $('#clr'); if (cl) cl.onclick = () => { delete S.covers[al.id]; saveCovers(); draw(cands, false); };
+    const ni = $('#nextiffy'); if (ni) ni.onclick = () => go('#/cover/' + nextIffy.id);
   };
-  draw(cur.cands || [], !(cur.cands && cur.cands.length));
-  if (!(cur.cands && cur.cands.length)) draw(await findCandidates(q, al), false);
+  draw([], true);
+  draw(await findCandidates(q, al, true), false);
   $('#back').onclick = () => go('#/album/' + al.id);
 }
 
-/* プレイリスト。索引に混ぜて pCloud 経由で端末をまたがせる。 */
 function screenLists() {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = 'プレイリスト';
@@ -2234,7 +2275,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v27');
+  L.push('版: v28');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
