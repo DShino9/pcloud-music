@@ -62,7 +62,9 @@ const S = {
   filter: LS.get('filter', 'all'),
   genre:  LS.get('genre', ''),
   sort:   LS.get('sort', 'artist'),
-  relay:  LS.get('relay', ''),      // 中継所のURL
+  code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
+  linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
+  relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
   pub:    LS.get('pub', false),     // 公開リンク経由にするか
   sweep:  null,
 };
@@ -121,6 +123,28 @@ async function api(method, params = {}, host, ms = 25000) {
   if (j.result !== 0) throw new PCloudError(j.result, j.error);
   return j;
 }
+/* 共有リンクの符号で呼ぶ。合鍵と違って Origin で弾かれない。
+   耳読が Mac 無しで鳴るのはこの道を通っているから。 */
+async function apiPub(method, params = {}, ms = 25000) {
+  const u = new URL('https://' + S.host + '/' + method);
+  u.searchParams.set('code', S.code);
+  if (S.linkpw) u.searchParams.set('linkpassword', S.linkpw);
+  for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, v);
+  const ac = new AbortController();
+  let timer;
+  const clock = new Promise((_, rej) => {
+    timer = setTimeout(() => { try { ac.abort(); } catch (e) {} 
+      rej(new PCloudError(-3, 'pCloud からの返事がありません')); }, ms);
+  });
+  let r;
+  try { r = await Promise.race([fetch(u, { cache: 'no-store', signal: ac.signal, referrerPolicy: 'no-referrer' }), clock]); }
+  catch (e) { if (e instanceof PCloudError) throw e; throw new PCloudError(-4, 'pCloud につながりません'); }
+  finally { clearTimeout(timer); }
+  const j = await r.json();
+  if (j.result !== 0) throw new PCloudError(j.result, j.error);
+  return j;
+}
+
 /* 画像は API に auth を載せた URL をそのまま <img> に渡す（往復が1回で済む） */
 const thumbUrl = (fileid, px) =>
   'https://' + S.host + '/getthumb?fileid=' + fileid + '&size=' + px + 'x' + px +
@@ -202,7 +226,9 @@ function walk(node, trail, out) {
   for (const c of kids) if (c.isfolder) walk(c, here, out);
 }
 async function scanLibrary(folderid) {
-  const r = await api('listfolder', { folderid, recursive: 1 });
+  /* 符号があれば、共有リンクの中身が丸ごと降ってくる。folderid も合鍵も要らない。 */
+  const r = S.code ? await apiPub('showpublink', { recursive: 1 })
+                   : await api('listfolder', { folderid, recursive: 1 });
   const out = [];
   walk(r.metadata, [], out);
   out.sort((a, b) => collator.compare(a.artist + a.name, b.artist + b.name));
@@ -449,8 +475,8 @@ function updateSweepBar() {
 const coverOf = al => {
   const c = S.covers[al.id];
   if (c) return c.url;
-  if (al.folderCover) return thumbUrl(al.folderCover, 400);
-  return null;
+  if (al.folderCover && !S.code) return thumbUrl(al.folderCover, 400);
+  return null;   /* 符号のときは往復が要るので、棚では出さない（自動収集で付く） */
 };
 
 /* ============ 再生 ============ */
@@ -472,7 +498,10 @@ const albumRefs = al => al.tracks.map((_, i) => ({ al, i }));
 async function fileLink(fileid) {
   const hit = P.linkCache.get(fileid);
   if (hit && hit.exp > Date.now()) return hit.url;
-  const r = await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
+  /* 合鍵で出す getfilelink は Origin で弾かれる（7010）。
+     符号で出す getpublinkdownload は弾かれない。耳読と同じ道。 */
+  const r = S.code ? await apiPub('getpublinkdownload', { fileid, forcedownload: 0 })
+                   : await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
   const url = 'https://' + r.hosts[0] + r.path;
   P.linkCache.set(fileid, { url, exp: Date.now() + 40 * 60 * 1000 });
   return url;
@@ -1078,6 +1107,8 @@ async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
+  /* 符号があれば、ブラウザが pCloud から直に受け取れる。中継所も合鍵も要らない。 */
+  if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
   if (S.relay) return { url: null, relay: true, local: false, cors: true };
   if (V.link !== false) {
@@ -1188,6 +1219,7 @@ function screenLogin() {
       <div class="field"><label>パスワード</label>
         <input id="pw" type="password" autocomplete="current-password"></div>
       <button class="primary" id="go">つなぐ</button>
+      <button class="hbtn" id="bycode" style="width:100%;padding:11px;border-radius:10px;margin-top:10px;background:var(--bg2);border:1px solid var(--line)">共有リンクで使う（合鍵なし・こちらが確実）</button>
       <div class="msg${lastMsg && lastMsg.cls ? ' ' + lastMsg.cls : ''}" id="m">${lastMsg ? esc(lastMsg.text) : ''}</div>
       <button class="hbtn" id="diag" style="margin-top:14px;width:100%;padding:9px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);font-size:12.5px;color:var(--dim)">つながりを調べる</button>
       <pre id="diagout" class="hide" style="white-space:pre-wrap;font-size:11.5px;color:var(--dim);background:#0c0c10;border:1px solid var(--line);border-radius:9px;padding:11px;margin-top:10px;line-height:1.7"></pre>
@@ -1226,6 +1258,7 @@ function screenLogin() {
   $('#go').onclick = run;
   $('#pw').onkeydown = e => { if (e.key === 'Enter') run(); };
   $('#em').onkeydown = e => { if (e.key === 'Enter') $('#pw').focus(); };
+  $('#bycode').onclick = () => go('#/code');
   $('#diag').onclick = async () => {
     const o = $('#diagout'); o.classList.remove('hide'); o.textContent = '調べています…';
     try { o.textContent = await selftest(); } catch (e) { o.textContent = '調べられません: ' + (e.message || e); }
@@ -1664,6 +1697,7 @@ function screenMenu() {
       <button class="row" id="rescan"><span class="nm">棚を読み直す</span><span class="sub">${S.albums.length} アルバム</span></button>
       <button class="row" id="sweep"><span class="nm">ジャケットを一巡して探す</span><span class="sub">${c} 枚</span></button>
       <button class="row" id="sweepall"><span class="nm">自動で付けた分を探し直す</span></button>
+      <button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
@@ -1683,6 +1717,7 @@ function screenMenu() {
     for (const [k, v] of Object.entries(S.covers)) if (!v.manual) delete S.covers[k];
     saveCovers(); go('#/lib'); setTimeout(() => sweepCovers(true), 60);
   };
+  $('#code').onclick   = () => go('#/code');
   $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
   $('#meta').onclick  = () => sweepMeta();
@@ -1701,7 +1736,7 @@ function screenMenu() {
 
 function renderRoute() {
   const h = location.hash || '';
-  if (!S.auth) {
+  if (!S.auth && !S.code) {
     if (h && h !== '#/login') {
       note('合鍵が無いのでログイン画面に戻した（' + h + '）');
       lastMsg = { text: '合鍵が残らなかったので、もう一度お願いします', cls: 'err' };
@@ -1717,11 +1752,12 @@ function renderRoute() {
   if (h === '#/vis')             return screenVis();
   if (h === '#/routes')          return screenRoutes();
   if (h === '#/relay')           return screenRelay();
+  if (h === '#/code')            return screenCode();
   if (h === '#/queue')           return screenQueue();
   if (h === '#/smart')           return screenSmart();
   if (h === '#/lists')           return screenLists();
   if (h === '#/history')         return screenHistory();
-  if (!S.rootId) return screenPick(0);
+  if (!S.rootId && !S.code) return screenPick(0);
   return screenLib();
 }
 $('#btnMenu').onclick   = () => go('#/menu');
@@ -1836,6 +1872,76 @@ async function probeRoutes(withPublink) {
     }
   }
   return L.join('\n');
+}
+
+/* 共有リンクの符号で使う。合鍵より制限が少なく、Mac も中継所も要らない。 */
+function parseCode(v) {
+  v = String(v || '').trim();
+  let host = null, code = v;
+  const m = v.match(/^https?:\/\/([a-z0-9.-]*pcloud\.(?:link|com))\/[^?]*\?(.*)$/i);
+  if (m) {
+    host = /^e\./i.test(m[1]) || /^eapi/i.test(m[1]) ? 'eapi.pcloud.com' : 'api.pcloud.com';
+    const q = new URLSearchParams(m[2]);
+    code = q.get('code') || '';
+  }
+  return { code: code.replace(/[^A-Za-z0-9]/g, ''), host };
+}
+
+function screenCode() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '共有リンクで使う';
+  $('#btnCovers').classList.add('hide');
+  main().innerHTML = `
+    <div class="note" style="padding:0 2px 14px">
+      pCloud は合鍵で出したリンクを、ブラウザからだと弾きます（7010）。
+      <b>共有リンクの符号なら弾かれません。</b>これが耳読が Mac 無しで鳴っている仕組みで、
+      中継所も合鍵も要らなくなります。</div>
+    <div class="field"><label>音楽フォルダの共有リンク</label>
+      <input id="cd" placeholder="https://u.pcloud.link/publink/show?code=…"
+        value="${esc(S.code)}" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div class="field"><label>合言葉（掛けていなければ空のまま）</label>
+      <input id="cpw" type="password" value="${esc(S.linkpw)}" autocomplete="off"></div>
+    <button class="primary" id="ctest">つないで棚を読む</button>
+    <div class="msg" id="cm"></div>
+    ${S.code ? '<div style="height:10px"></div><button class="hbtn" id="cclr" style="width:100%;padding:10px;border-radius:10px">符号を忘れる</button>' : ''}
+    <div class="note" style="padding:16px 2px 0;line-height:1.9">
+      <b>共有リンクの作り方</b><br>
+      1. pCloud で <b>音楽</b> フォルダを右クリック → 共有 → リンクを取得<br>
+      2. 出てきた URL をそのまま上に貼る<br><br>
+      リンクを知っている人はフォルダを開けます。気になるときは
+      <b>pCloud 側でリンクに合言葉を掛けて</b>、それを下の欄に入れてください。
+    </div>`;
+  const run = async () => {
+    const { code, host } = parseCode($('#cd').value);
+    if (!code) { $('#cm').className = 'msg err'; $('#cm').textContent = '符号が読み取れません'; return; }
+    const pw = $('#cpw').value;
+    const before = { code: S.code, pw: S.linkpw, host: S.host };
+    S.code = code; S.linkpw = pw; if (host) S.host = host;
+    $('#cm').className = 'msg'; $('#cm').textContent = '読んでいます…';
+    try {
+      const r = await apiPub('showpublink', { recursive: 1 });
+      const out = [];
+      walk(r.metadata, [], out);
+      LS.set('code', S.code); LS.set('linkpw', S.linkpw); LS.set('host', S.host);
+      LS.set('rootName', S.rootName = r.metadata.name || '音楽');
+      S.albums = out.sort((a, b) => collator.compare(a.artist + a.name, b.artist + b.name));
+      note('符号で棚を読めた: ' + S.albums.length + 'アルバム');
+      $('#cm').className = 'msg ok';
+      $('#cm').textContent = S.albums.length + ' アルバム読めました';
+      setTimeout(() => go('#/lib'), 700);
+    } catch (e) {
+      S.code = before.code; S.linkpw = before.pw; S.host = before.host;
+      $('#cm').className = 'msg err';
+      $('#cm').innerHTML = esc(e.code === 2000 || e.code === 2261 ? '合言葉が違うか、リンクが見つかりません' : (e.message || '読めません')) +
+        (e.code > 0 ? `<br><span style="color:var(--dim);font-size:11.5px">pCloud の返事: ${e.code}</span>` : '');
+    }
+  };
+  $('#ctest').onclick = run;
+  $('#cpw').onkeydown = e => { if (e.key === 'Enter') run(); };
+  const c = $('#cclr'); if (c) c.onclick = () => {
+    S.code = ''; S.linkpw = ''; LS.del('code'); LS.del('linkpw'); S.albums = []; screenCode();
+  };
+  $('#back').onclick = () => go(S.auth || S.code ? '#/lib' : '#/login');
 }
 
 function screenRelay() {
@@ -1975,7 +2081,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v20');
+  L.push('版: v21');
+  L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
   L.push('中継所: ' + (S.relay || 'なし'));
