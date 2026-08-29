@@ -499,6 +499,9 @@ async function playAt(qi) {
   if (!t) return;
   try {
     const hit = await cachedResponse(t.id);
+    /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
+       ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
+    au.crossOrigin = (V.ok && !hit) ? 'anonymous' : null;
     au.src = hit ? URL.createObjectURL(await hit.blob()) : await fileLink(t.id);
     await au.play();
   } catch (e) { toast('再生できません: ' + (e.message || e)); return; }
@@ -576,8 +579,331 @@ au.addEventListener('timeupdate', () => {
 $('#play').onclick = () => (au.paused ? au.play() : au.pause());
 $('#next').onclick = nextTrack;
 $('#prev').onclick = prevTrack;
-$('#pcov').onclick = () => go('#/queue');
+$('#pcov').onclick = () => go('#/now');
 $('#pti').onclick  = () => { const c = cur(); if (c) go('#/album/' + c.al.id); };
+
+/* ============ ビジュアライザー ============ */
+/* 音を解析するには、音のデータに手が届かないといけない。
+   pCloud から直に流している音がブラウザに読ませてもらえるかは、
+   叩いてみるまで分からない。読めない音を Web Audio に通すと
+   ブラウザは「音を消す」ので、確かめる前に繋いではいけない。 */
+const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
+            ok:false, cors:LS.get('cors', null), on:false, vi:0, raf:0 };
+const BANDS = 84;
+
+async function probeCors(fileid) {
+  if (V.cors !== null) return V.cors;
+  try {
+    const u = await fileLink(fileid);
+    const r = await fetch(u, { headers: { Range: 'bytes=0-1' } });
+    V.cors = r.ok || r.status === 206;
+  } catch (e) { V.cors = false; }
+  LS.set('cors', V.cors);
+  note('直に流した音を読めるか: ' + (V.cors ? 'はい' : 'いいえ'));
+  return V.cors;
+}
+function initGraph() {
+  if (V.ctx) return V.ok;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    V.ctx = new AC();
+    V.src = V.ctx.createMediaElementSource(au);
+    const sp = V.ctx.createChannelSplitter(2);
+    V.aL = V.ctx.createAnalyser(); V.aR = V.ctx.createAnalyser();
+    V.aL.fftSize = V.aR.fftSize = 2048;
+    V.aL.smoothingTimeConstant = V.aR.smoothingTimeConstant = 0.72;
+    V.src.connect(sp);
+    sp.connect(V.aL, 0); sp.connect(V.aR, 1);
+    V.src.connect(V.ctx.destination);
+    V.fL = new Uint8Array(V.aL.frequencyBinCount);
+    V.fR = new Uint8Array(V.aR.frequencyBinCount);
+    V.td = new Uint8Array(V.aL.fftSize);
+    V.ok = true;
+  } catch (e) { V.ok = false; note('解析器を作れない: ' + e.message); }
+  return V.ok;
+}
+/* 周波数の目盛りは対数。低い方を細かく見ないと、音楽らしい動きにならない。 */
+const band = new Float32Array(BANDS), peakB = new Float32Array(BANDS);
+let lvL = 0, lvR = 0, pkL = 0, pkR = 0, wav = new Float32Array(256), beatE = 0, spin = 0;
+function readAudio(dt) {
+  if (!V.ok) return false;
+  V.aL.getByteFrequencyData(V.fL); V.aR.getByteFrequencyData(V.fR);
+  V.aL.getByteTimeDomainData(V.td);
+  const n = V.fL.length;
+  let sum = 0, bass = 0;
+  for (let i = 0; i < BANDS; i++) {
+    const a = Math.floor(Math.pow(i / BANDS, 2.1) * n);
+    const b = Math.max(a + 1, Math.floor(Math.pow((i + 1) / BANDS, 2.1) * n));
+    let m = 0;
+    for (let k = a; k < b && k < n; k++) m = Math.max(m, (V.fL[k] + V.fR[k]) / 2);
+    const v = m / 255;
+    band[i] = v; peakB[i] = Math.max(peakB[i] - dt * 0.45, v);
+    sum += v; if (i < BANDS * 0.12) bass = Math.max(bass, v);
+  }
+  let sl = 0, sr = 0;
+  for (let i = 0; i < n; i++) { sl += V.fL[i]; sr += V.fR[i]; }
+  lvL += (Math.min(1, sl / n / 90) - lvL) * 0.35;
+  lvR += (Math.min(1, sr / n / 90) - lvR) * 0.35;
+  pkL = Math.max(pkL - dt * 0.4, lvL); pkR = Math.max(pkR - dt * 0.4, lvR);
+  for (let i = 0; i < wav.length; i++) wav[i] = (V.td[Math.floor(i * V.td.length / wav.length)] - 128) / 128;
+  beatE = Math.max(beatE - dt * 2.6, bass);
+  return sum > 0.01;
+}
+
+let vart = null, vartId = null;
+function coverImage(al) {
+  const url = coverOf(al);
+  if (!url) { vart = null; vartId = null; return null; }
+  if (vartId === al.id && vart && vart.complete) return vart;
+  const im = new Image(); im.crossOrigin = 'anonymous'; im.src = url;
+  vart = im; vartId = al.id;
+  return im.complete ? im : null;
+}
+
+const VIS = {
+  disc:  ['回転ジャケット', false],
+  ladder:['L／R レベル',    true],
+  bars:  ['スペクトラム',    true],
+  mirror:['鏡像',           true],
+  scope: ['オシロスコープ',  true],
+  ring:  ['円環',           true],
+  vu:    ['アナログVU',      true],
+  parts: ['粒子',           true],
+};
+S.vis = LS.get('vis', ['disc', 'ladder', 'bars', 'ring', 'scope']);
+
+const VD = {
+  disc(x, w, h, al) {
+    const cx = w/2, cy = h/2, rad = Math.min(w,h)*0.36, im = coverImage(al);
+    x.save(); x.translate(cx, cy); x.rotate(spin);
+    x.beginPath(); x.arc(0,0,rad,0,7);
+    if (im && im.complete && im.naturalWidth) { x.save(); x.clip(); x.drawImage(im,-rad,-rad,rad*2,rad*2); x.restore(); }
+    else { x.fillStyle = '#22222b'; x.fill(); }
+    const sh = x.createLinearGradient(-rad,-rad,rad,rad);
+    sh.addColorStop(0,'rgba(255,255,255,.20)'); sh.addColorStop(.35,'rgba(255,255,255,0)');
+    sh.addColorStop(.62,'rgba(255,255,255,.13)'); sh.addColorStop(1,'rgba(255,255,255,0)');
+    x.beginPath(); x.arc(0,0,rad,0,7); x.fillStyle = sh; x.fill();
+    x.restore();
+    x.strokeStyle = 'rgba(0,0,0,.3)';
+    for (let i=1;i<7;i++){ x.beginPath(); x.arc(cx,cy,rad*(0.3+i*0.1),0,7); x.stroke(); }
+    x.beginPath(); x.arc(cx,cy,rad*0.15,0,7); x.fillStyle='#0b0b0f'; x.fill();
+    x.strokeStyle='rgba(255,255,255,.16)'; x.stroke();
+    x.beginPath(); x.arc(cx,cy,rad+4+beatE*7,0,7);
+    x.strokeStyle=`rgba(110,168,254,${0.16+beatE*0.5})`; x.lineWidth=2; x.stroke(); x.lineWidth=1;
+  },
+  ladder(x, w, h) {
+    const pad = Math.max(40, w*0.11), seg = Math.floor((w-pad-24)/11);
+    [['L',lvL,pkL],['R',lvR,pkR]].forEach((rw,ri) => {
+      const y = h*(ri?0.58:0.42);
+      x.fillStyle='#8b8b99'; x.font='600 14px -apple-system,sans-serif'; x.fillText(rw[0], pad-26, y+5);
+      for (let i=0;i<seg;i++) {
+        const f=i/seg, on=f<rw[1], pk=Math.abs(f-rw[2])<1/seg;
+        x.fillStyle = on ? (f>0.86?'#e06c75':f>0.66?'#e5a34a':'#5fbf7f')
+                    : pk ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.07)';
+        x.fillRect(pad+i*11, y-9, 8, 18);
+      }
+    });
+  },
+  bars(x, w, h) {
+    const bw = w/BANDS;
+    for (let i=0;i<BANDS;i++) {
+      const bh = band[i]*h*0.7;
+      const g = x.createLinearGradient(0,h,0,h-bh);
+      g.addColorStop(0,'rgba(95,191,127,.95)'); g.addColorStop(.6,'#e5a34a'); g.addColorStop(1,'#e06c75');
+      x.fillStyle=g; x.fillRect(i*bw+1, h-bh, bw-2, bh);
+      x.fillStyle='rgba(255,255,255,.75)'; x.fillRect(i*bw+1, h-peakB[i]*h*0.7-2, bw-2, 2);
+    }
+  },
+  mirror(x, w, h) {
+    const bw = w/BANDS, mid = h/2;
+    for (let i=0;i<BANDS;i++) {
+      const v = band[i], bh = v*h*0.42, hue = 205-v*165;
+      x.fillStyle = `hsl(${hue} 84% ${44+v*24}%)`;
+      x.fillRect(i*bw+1, mid-bh, bw-2, bh);
+      x.globalAlpha=.32; x.fillRect(i*bw+1, mid+2, bw-2, bh*0.7); x.globalAlpha=1;
+    }
+  },
+  scope(x, w, h) {
+    x.beginPath();
+    for (let i=0;i<wav.length;i++) {
+      const px=i/(wav.length-1)*w, py=h/2-wav[i]*h*0.34;
+      i?x.lineTo(px,py):x.moveTo(px,py);
+    }
+    x.strokeStyle='#5fbf7f'; x.lineWidth=2; x.shadowColor='#5fbf7f'; x.shadowBlur=10;
+    x.stroke(); x.shadowBlur=0; x.lineWidth=1;
+  },
+  ring(x, w, h, al) {
+    const cx=w/2, cy=h/2, r0=Math.min(w,h)*0.20, im=coverImage(al);
+    x.save(); x.translate(cx,cy);
+    x.beginPath(); x.arc(0,0,r0-4,0,7);
+    if (im && im.complete && im.naturalWidth) { x.save(); x.clip(); x.drawImage(im,-r0,-r0,r0*2,r0*2); x.restore(); }
+    else { x.fillStyle='#22222b'; x.fill(); }
+    for (let i=0;i<BANDS;i++) {
+      const a=i/BANDS*Math.PI*2-Math.PI/2, v=band[i], l=6+v*Math.min(w,h)*0.24;
+      x.beginPath();
+      x.moveTo(Math.cos(a)*r0, Math.sin(a)*r0);
+      x.lineTo(Math.cos(a)*(r0+l), Math.sin(a)*(r0+l));
+      x.strokeStyle=`hsl(${210-v*30} 90% ${50+v*24}%)`; x.lineWidth=3; x.stroke();
+    }
+    x.lineWidth=1; x.restore();
+  },
+  vu(x, w, h) {
+    [0,1].forEach(k => {
+      const cx=w*(k?0.72:0.28), cy=h*0.68, r=Math.min(w*0.2,h*0.3);
+      x.fillStyle='#e9e2cf';
+      x.fillRect(cx-r*1.12, cy-r*0.92, r*2.24, r*1.02+12);
+      for (let i=0;i<=10;i++) {
+        const a=Math.PI*(1.13-i/10*0.86);
+        x.beginPath();
+        x.moveTo(cx+Math.cos(a)*r*0.80, cy-Math.sin(a)*r*0.80);
+        x.lineTo(cx+Math.cos(a)*r*0.92, cy-Math.sin(a)*r*0.92);
+        x.strokeStyle=i>7?'rgba(190,40,30,.9)':'rgba(40,35,30,.8)'; x.lineWidth=i>7?2:1; x.stroke();
+      }
+      const v=(k?lvR:lvL), a=Math.PI*(1.13-Math.min(v,1)*0.86);
+      x.beginPath(); x.moveTo(cx,cy); x.lineTo(cx+Math.cos(a)*r*0.88, cy-Math.sin(a)*r*0.88);
+      x.strokeStyle='#1b1b1b'; x.lineWidth=2; x.stroke();
+      x.fillStyle='#1b1b1b'; x.beginPath(); x.arc(cx,cy,3.5,0,7); x.fill();
+      x.lineWidth=1;
+    });
+  },
+  parts: (() => {
+    const P2 = []; for (let i=0;i<140;i++) P2.push({a:Math.random()*7, r:Math.random(), s:.3+Math.random()});
+    return (x, w, h) => {
+      const cx=w/2, cy=h/2, R0=Math.min(w,h)*0.44;
+      P2.forEach((p,i) => {
+        const v = band[i % BANDS];
+        p.a += (0.1+p.s*0.28)*0.016*(1+beatE*2.4);
+        const rr=(p.r*0.7+0.3+v*0.34)*R0;
+        x.beginPath(); x.arc(cx+Math.cos(p.a)*rr*1.45, cy+Math.sin(p.a)*rr, 1+v*3.4*p.s, 0, 7);
+        x.fillStyle=`hsla(${200+v*70} 90% ${56+v*18}% / ${0.22+v*0.7})`; x.fill();
+      });
+    };
+  })(),
+};
+
+function screenNow() {
+  const c = cur();
+  if (!c) { go('#/lib'); return; }
+  $('#hdr').classList.add('hide');
+  const list = S.vis.length ? S.vis : ['disc'];
+  if (V.vi >= list.length) V.vi = 0;
+  main().innerHTML = `
+    <div class="now">
+      <div class="nowtop">
+        <button class="hbtn" id="nclose">✕</button>
+        <div class="nowinfo"><div class="nt" id="nti"></div><div class="na" id="nar"></div></div>
+        <button class="hbtn" id="npick">⚙</button>
+      </div>
+      <canvas id="vcv"></canvas>
+      <div class="nowname" id="vname"></div>
+      <div class="nowbar"><i id="nseek"></i></div>
+      <div class="nowctl">
+        <button id="nprev">⏮</button><button id="nplay">▶</button><button id="nnext">⏭</button>
+        <button class="hbtn" id="nq">並び</button>
+      </div>
+      <div class="msg" id="nmsg"></div>
+    </div>`;
+  const cv = $('#vcv'), ctx = cv.getContext('2d');
+  const paint = () => {
+    const cc = cur(); if (!cc) return;
+    $('#nti').textContent = trackTitle(cc.al.tracks[cc.i]);
+    $('#nar').textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
+    $('#vname').textContent = (VIS[list[V.vi]] || VIS.disc)[0] + `（${V.vi + 1}/${list.length}・画面を触ると切り替え）`;
+    $('#nplay').textContent = au.paused ? '▶' : '⏸';
+  };
+  paint();
+  const fit = () => {
+    const dpr = Math.min(devicePixelRatio || 1, 2), r = cv.getBoundingClientRect();
+    cv.width = Math.round(r.width*dpr); cv.height = Math.round(r.height*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  };
+  fit(); addEventListener('resize', fit);
+
+  let last = 0;
+  const frame = now => {
+    if (location.hash !== '#/now') { V.on = false; return; }
+    V.raf = requestAnimationFrame(frame);
+    const dt = Math.min(0.05, (now-last)/1000 || 0.016); last = now;
+    if (!au.paused) spin += dt*1.1;
+    const live = readAudio(dt);
+    const cc = cur(); if (!cc) return;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    ctx.clearRect(0,0,w,h); ctx.fillStyle='#0b0b0f'; ctx.fillRect(0,0,w,h);
+    const key = list[V.vi];
+    (VD[key] || VD.disc)(ctx, w, h, cc.al);
+    if (VIS[key] && VIS[key][1] && !live) {
+      ctx.fillStyle='rgba(139,139,153,.85)'; ctx.font='13px -apple-system,sans-serif';
+      ctx.textAlign='center';
+      ctx.fillText('音を解析できていません。回転ジャケットなら動きます', w/2, h-14);
+      ctx.textAlign='left';
+    }
+  };
+  V.on = true; cancelAnimationFrame(V.raf); V.raf = requestAnimationFrame(frame);
+
+  cv.onclick = () => { V.vi = (V.vi + 1) % list.length; paint(); };
+  $('#nclose').onclick = () => go('#/lib');
+  $('#nprev').onclick  = () => { prevTrack(); setTimeout(paint, 60); };
+  $('#nnext').onclick  = () => { nextTrack(); setTimeout(paint, 60); };
+  $('#nplay').onclick  = () => { au.paused ? au.play() : au.pause(); setTimeout(paint, 60); };
+  $('#nq').onclick     = () => go('#/queue');
+  $('#npick').onclick  = () => go('#/vis');
+  au.addEventListener('play', paint); au.addEventListener('pause', paint);
+  au.addEventListener('timeupdate', () => {
+    const b = $('#nseek'); if (b && au.duration) b.style.width = (au.currentTime/au.duration*100)+'%';
+  });
+  /* 解析はここで初めて繋ぐ。読めない音を通すと無音になるので、確かめてから。 */
+  (async () => {
+    const cc = cur(); if (!cc) return;
+    const cached = await cachedResponse(cc.al.tracks[cc.i].id);
+    const ok = cached ? true : await probeCors(cc.al.tracks[cc.i].id);
+    if (!ok) {
+      $('#nmsg').className = 'msg';
+      $('#nmsg').innerHTML = '直に流している音は解析できません。<b>アルバムを「端末に入れる」と、全部の絵が動きます。</b>';
+      return;
+    }
+    if (!V.ok) {
+      /* いま鳴っている曲は CORS の印なしで読み込まれている。
+         そのまま解析器に繋ぐとブラウザが音を消すので、同じ位置で読み込み直す。 */
+      if (!cached) {
+        const pos = au.currentTime, wasPlaying = !au.paused, src = au.src;
+        au.crossOrigin = 'anonymous';
+        au.src = src;
+        au.addEventListener('loadedmetadata', function once() {
+          au.removeEventListener('loadedmetadata', once);
+          try { au.currentTime = pos; } catch (e) {}
+          if (wasPlaying) au.play().catch(() => {});
+        });
+      }
+      initGraph();
+      if (V.ctx && V.ctx.state === 'suspended') { try { await V.ctx.resume(); } catch (e) {} }
+      if (!V.ok) {
+        $('#nmsg').className = 'msg';
+        $('#nmsg').textContent = '解析器を作れませんでした。回転ジャケットなら動きます';
+      }
+    }
+  })();
+}
+
+function screenVis() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = 'ビジュアライザー';
+  $('#btnCovers').classList.add('hide');
+  main().innerHTML = `
+    <div class="rowlist">${Object.keys(VIS).map(k => `
+      <button class="row" data-v="${k}">
+        <span class="nm">${VIS[k][0]}${VIS[k][1] ? '' : '<br><span class="sub">音の解析が要りません。何があっても動きます</span>'}</span>
+        <span class="chk ${S.vis.includes(k) ? 'on' : ''}">${S.vis.includes(k) ? '✓' : ''}</span>
+      </button>`).join('')}</div>
+    <div class="note" style="padding:0 2px">選んだものを、再生画面で触るたびに順に切り替えます。
+    解析が要るものは、直に流している音では動かないことがあります（端末に入れた曲なら確実に動きます）。</div>`;
+  main().querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
+    const k = b.dataset.v;
+    S.vis = S.vis.includes(k) ? S.vis.filter(x => x !== k) : S.vis.concat(k);
+    if (!S.vis.length) S.vis = ['disc'];
+    LS.set('vis', S.vis); V.vi = 0; screenVis();
+  });
+  $('#back').onclick = () => go(cur() ? '#/now' : '#/lib');
+}
 
 /* ============ オフライン保存 ============ */
 /* 直リンクが CORS を返さない場合に備え、api 経由の読み出しに落ちる道を用意する。 */
@@ -1212,6 +1538,8 @@ function renderRoute() {
   if (h.startsWith('#/album/'))  return screenAlbum(h.slice(8));
   if (h.startsWith('#/cover/'))  return screenCover(h.slice(8));
   if (h === '#/menu')            return screenMenu();
+  if (h === '#/now')             return screenNow();
+  if (h === '#/vis')             return screenVis();
   if (h === '#/queue')           return screenQueue();
   if (h === '#/smart')           return screenSmart();
   if (h === '#/lists')           return screenLists();
@@ -1256,7 +1584,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v9');
+  L.push('版: v10');
+  L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
   L.push('― できごと ―');
   L.push(readLog());
