@@ -59,7 +59,26 @@ export default {
     const h = new Headers();
     const range = req.headers.get('Range');
     if (range) h.set('Range', range);
-    const up = await fetch(hit.url, { headers: h, redirect: 'follow' });
+    h.set('user-agent', 'Mozilla/5.0 (compatible; ongakudana/1.0)');
+    let up = await fetch(hit.url, { headers: h, redirect: 'follow' });
+    /* pCloud のリンクは短命で、要求した相手に紐づく。410 が返ったら
+       控えを捨てて取り直し、一度だけやり直す。 */
+    if (up.status === 410 || up.status === 403) {
+      linkCache.delete(key);
+      const api2 = `https://${host}/getfilelink?forcedownload=0&fileid=${encodeURIComponent(fileid)}&auth=${encodeURIComponent(auth)}`;
+      try {
+        const j2 = await (await fetch(api2)).json();
+        if (j2.result === 0) {
+          hit = { url: 'https://' + j2.hosts[0] + j2.path, exp: Date.now() + 5 * 60 * 1000 };
+          linkCache.set(key, hit);
+          up = await fetch(hit.url, { headers: h, redirect: 'follow' });
+        }
+      } catch (e) { /* そのまま下へ */ }
+    }
+    if (!up.ok && up.status !== 206) {
+      return json({ error: 'pCloud が中身を渡しません', status: up.status,
+                    hint: up.status === 410 ? 'リンクが要求元に紐づいている可能性' : '' }, 502);
+    }
     const out = new Headers();
     for (const k of ['content-type','content-length','content-range','accept-ranges','last-modified','etag']) {
       const v = up.headers.get(k); if (v) out.set(k, v);

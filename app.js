@@ -645,7 +645,7 @@ $('#pti').onclick  = () => { const c = cur(); if (c) go('#/album/' + c.al.id); }
    叩いてみるまで分からない。読めない音を Web Audio に通すと
    ブラウザは「音を消す」ので、確かめる前に繋いではいけない。 */
 const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
-            ok:false, cors:null, link:null,   /* 判定は毎回やり直す。残すと直したことが効かなくなる */
+            ok:false, cors:null, link:null, direct:null, directUrl:null,
             on:false, vi:0, raf:0 };
 const BANDS = 84;
 
@@ -1025,12 +1025,42 @@ const relayUrl = (path, t) => S.relay.replace(/\/+$/, '') + path +
   '?fileid=' + encodeURIComponent(t.id) + '&host=' + encodeURIComponent(S.host) +
   '&auth=' + encodeURIComponent(S.auth);
 
+/* 中継所が出したリンクを、ブラウザが直接取れるかどうか試す。 */
+async function tryDirect(t) {
+  try {
+    const r = await fetch(relayUrl('/link', t), { referrerPolicy: 'no-referrer' });
+    const j = await r.json();
+    if (!j.url) return false;
+    const probe = await fetch(j.url, { headers: { Range: 'bytes=0-99' }, referrerPolicy: 'no-referrer' });
+    if (probe.ok || probe.status === 206) {
+      const b = new Uint8Array(await probe.arrayBuffer());
+      const txt = String.fromCharCode(...b.slice(0, 4));
+      if (txt.startsWith('<htm') || txt.startsWith('{')) { note('直接取得: 中身が音でない'); return false; }
+      V.directUrl = j.url;
+      note('直接取得できる（' + probe.status + '）');
+      return true;
+    }
+    note('直接取得は ' + probe.status + ' で断られた');
+  } catch (e) { note('直接取得できない: ' + (e.message || e)); }
+  return false;
+}
+
 async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 中継所があればそこから流す。頭出しもでき、解析器にも通せる。 */
-  if (S.relay) return { url: relayUrl('/audio', t), local: false, cors: true };
+  /* 中継所がある場合、道は2つ。
+     ① 中継所にリンクだけ出してもらい、ブラウザが直接 pCloud から取る（速い）
+     ② 中継所に中身ごと流してもらう
+     pCloud のリンクは要求した相手に紐づくらしく、②が 410 で断られることがある。
+     どちらが通るかは相手次第なので、一度試して通った方を覚える。 */
+  if (S.relay) {
+    V.directUrl = null;
+    const okDirect = (V.direct === false) ? false : await tryDirect(t);
+    if (V.direct === null) V.direct = okDirect;
+    if (okDirect && V.directUrl) return { url: V.directUrl, local: false, cors: true };
+    return { url: relayUrl('/audio', t), local: false, cors: true };
+  }
   if (V.link !== false) {
     try {
       const u = await fileLink(t.id);
@@ -1714,6 +1744,14 @@ async function diagnoseRelay(t) {
     else if (asc.startsWith('{') || asc.startsWith('<')) L.push('→ 音ではなく文字が返っています');
   } catch (e) { L.push('/audio 取得失敗: ' + (e.message || e)); }
 
+  try {
+    const r3 = await fetch(relayUrl('/link', t), { referrerPolicy: 'no-referrer' });
+    const j3 = await r3.json();
+    if (j3.url) {
+      const p3 = await fetch(j3.url, { headers: { Range: 'bytes=0-99' }, referrerPolicy: 'no-referrer' });
+      L.push('ブラウザが直接: ' + p3.status);
+    }
+  } catch (e) { L.push('ブラウザが直接: ' + (e.message || e).slice(0, 40)); }
   note('中継所診断: ' + L.join(' / '));
   shout('中継所', L.join('  /  '));
 }
@@ -1892,7 +1930,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v17');
+  L.push('版: v18');
+  L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
