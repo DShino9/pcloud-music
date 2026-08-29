@@ -1,6 +1,6 @@
 /* 画面そのものを端末に置く。曲の実体は app.js が別の入れ物（tracks-v1）に持つ。 */
-const SHELL = 'shell-v2';
-const FILES = ['./', './index.html', './app.js', './manifest.webmanifest', './icon-192.png', './icon-180.png', './icon-512.png'];
+const SHELL = 'shell-v3';
+const FILES = ['./', './index.html', './app.js?v=2', './manifest.webmanifest', './icon-192.png', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -14,7 +14,8 @@ self.addEventListener('fetch', e => {
   const u = new URL(e.request.url);
   if (u.origin !== location.origin) return;              // pCloud も iTunes も素通し
   e.respondWith(
-    fetch(e.request).then(r => {
+    /* 素の fetch はブラウザの控えを掴むことがある。必ず問い合わせ直す。 */
+    fetch(e.request, { cache: 'no-cache' }).then(r => {
       const copy = r.clone();
       caches.open(SHELL).then(c => c.put(e.request, copy)).catch(() => {});
       return r;
