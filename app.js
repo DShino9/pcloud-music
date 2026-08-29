@@ -480,11 +480,63 @@ const coverOf = al => {
   return null;   /* 符号のときは往復が要るので、棚では出さない（自動収集で付く） */
 };
 
+/* ============ 操作シート ============ */
+/* YouTube Music の ⋮ にあたるもの。曲でもアルバムでも同じ形で出す。 */
+function sheet(head, items) {
+  const bg = $('#sheetbg'), sh = $('#sheet');
+  sh.innerHTML = `<div class="grip"></div>
+    <div class="head">
+      ${head.cover ? `<img src="${esc(head.cover)}" onerror="this.style.visibility='hidden'">`
+                   : '<img alt="">'}
+      <div class="t"><div class="n">${esc(head.name)}</div><div class="a">${esc(head.sub || '')}</div></div>
+    </div>` +
+    items.filter(Boolean).map((it, i) =>
+      `<button class="item" data-k="${i}"><span class="ic">${it[0]}</span>${esc(it[1])}</button>`).join('');
+  bg.classList.remove('hide'); sh.classList.remove('hide');
+  requestAnimationFrame(() => { bg.classList.add('on'); sh.classList.add('on'); });
+  const close = () => {
+    bg.classList.remove('on'); sh.classList.remove('on');
+    setTimeout(() => { bg.classList.add('hide'); sh.classList.add('hide'); }, 200);
+  };
+  bg.onclick = close;
+  sh.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+    close();
+    const it = items.filter(Boolean)[+b.dataset.k];
+    if (it && it[2]) it[2]();
+  });
+  return close;
+}
+function albumSheet(al) {
+  const fav = isFav('a' + al.id);
+  sheet({ name: al.name, sub: [al.artist, albumGenre(al), albumYear(al)].filter(Boolean).join(' · '),
+          cover: coverOf(al) },
+    [['▶', '今すぐ再生', () => play(al, 0)],
+     ['🔀', 'シャッフルで再生', () => startQueue(shuffle(albumRefs(al)), 0)],
+     ['⤵', '次に再生', () => enqueueNext(albumRefs(al))],
+     ['＋', '列の最後に追加', () => enqueueEnd(albumRefs(al))],
+     [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
+      () => { toggleFav('a' + al.id); renderRoute(); }],
+     ['💿', 'アルバムを開く', () => go('#/album/' + al.id)],
+     ['🖼', 'ジャケットを選び直す', () => go('#/cover/' + al.id)],
+     [albumOffline(al) ? '🗑' : '↓', albumOffline(al) ? '端末から消す' : '端末に入れる',
+      () => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al))]]);
+}
+function trackSheet(al, i) {
+  const t = al.tracks[i], fav = isFav('t' + t.id);
+  sheet({ name: trackTitle(t), sub: [al.artist, al.name].filter(Boolean).join(' — '), cover: coverOf(al) },
+    [['▶', '今すぐ再生', () => play(al, i)],
+     ['⤵', '次に再生', () => enqueueNext([{ al, i }])],
+     ['＋', '列の最後に追加', () => enqueueEnd([{ al, i }])],
+     [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
+      () => { toggleFav('t' + t.id); renderRoute(); }],
+     ['💿', 'アルバムを開く', () => go('#/album/' + al.id)]]);
+}
+
 /* ============ 再生 ============ */
 /* 待ち行列を器にする。アルバムを通して聴くのも、棚全体のシャッフルも、
    条件で組んだものも、すべて同じ「並んだ曲」として扱う。 */
 const au = $('#au');
-const P = { q: [], qi: -1, linkCache: new Map(), shuffled: false };
+const P = { q: [], qi: -1, linkCache: new Map(), repeat: LS.get('repeat', 'off') };
 const cur = () => (P.qi >= 0 ? P.q[P.qi] : null);
 Object.defineProperty(P, 'album', { get: () => (cur() ? cur().al : null) });
 Object.defineProperty(P, 'i',     { get: () => (cur() ? cur().i  : -1) });
@@ -627,11 +679,14 @@ function enqueueEnd(list) {
 const trackTitle = t => t.name.replace(/\.[^.]+$/, '').replace(/^\d+[\s._-]+/, '');
 function paintPlayer() {
   const p = $('#player'), c = cur();
-  if (!c) { p.classList.add('gone'); return; }
-  p.classList.remove('gone');
+  if (!c) { p.classList.add('gone'); document.body.classList.remove('playing'); return; }
+  p.classList.remove('gone'); document.body.classList.add('playing');
   const t = c.al.tracks[c.i];
   $('#pti').textContent = trackTitle(t);
   $('#par').textContent = [c.al.artist, c.al.name].filter(Boolean).join(' — ');
+  const nx = P.q[P.qi + 1];
+  $('#pnx').textContent = nx ? '次: ' + trackTitle(nx.al.tracks[nx.i]) : '次はありません';
+  $('#pqn').textContent = Math.max(0, P.q.length - P.qi - 1);
   const cv = coverOf(c.al);
   $('#pcov').src = cv || '';
   $('#pcov').style.visibility = cv ? 'visible' : 'hidden';
@@ -656,7 +711,11 @@ function setMediaSession() {
   set('seekforward',  d => { au.currentTime = au.currentTime + ((d && d.seekOffset) || 15); });
   set('seekto', d => { if (d && d.seekTime != null) au.currentTime = d.seekTime; });
 }
-function nextTrack() { if (P.qi + 1 < P.q.length) playAt(P.qi + 1); }
+function nextTrack(auto) {
+  if (auto && P.repeat === 'one') return playAt(P.qi);
+  if (P.qi + 1 < P.q.length) return playAt(P.qi + 1);
+  if (P.repeat === 'all' && P.q.length) return playAt(0);
+}
 function prevTrack() {
   if (P.qi < 0) return;
   if (au.currentTime > 3) { au.currentTime = 0; return; }
@@ -671,7 +730,7 @@ au.addEventListener('error', () => {
   note('音が鳴らない: ' + why + ' / ' + nm.slice(-24));
   toast(why + (e.code === 4 ? '（' + nm.split('.').pop() + '）' : ''), 5000);
 });
-au.addEventListener('ended', nextTrack);
+au.addEventListener('ended', () => nextTrack(true));
 au.addEventListener('play',  paintPlayer);
 au.addEventListener('pause', paintPlayer);
 au.addEventListener('timeupdate', () => {
@@ -684,8 +743,9 @@ au.addEventListener('timeupdate', () => {
 $('#play').onclick = () => (au.paused ? au.play() : au.pause());
 $('#next').onclick = nextTrack;
 $('#prev').onclick = prevTrack;
-$('#pcov').onclick = () => go('#/now');
-$('#pti').onclick  = () => { const c = cur(); if (c) go('#/album/' + c.al.id); };
+$('#pcov').onclick  = () => go('#/now');
+$('#pinfo').onclick = () => go('#/now');
+$('#pq').onclick    = () => go('#/queue');
 
 /* ============ ビジュアライザー ============ */
 /* 音を解析するには、音のデータに手が届かないといけない。
@@ -905,7 +965,8 @@ function screenNow() {
       <div class="nowbar"><i id="nseek"></i></div>
       <div class="nowctl">
         <button id="nprev">⏮</button><button id="nplay">▶</button><button id="nnext">⏭</button>
-        <button class="hbtn" id="nq">並び</button>
+        <button class="hbtn" id="nq">次に流れる</button>
+        <button class="hbtn" id="nalb">アルバム</button>
       </div>
       <div class="msg" id="nmsg"></div>
     </div>`;
@@ -914,6 +975,8 @@ function screenNow() {
     const cc = cur(); if (!cc) return;
     $('#nti').textContent = trackTitle(cc.al.tracks[cc.i]);
     $('#nar').textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
+    $('#nar').style.cursor = 'pointer';
+    $('#nar').onclick = () => go('#/album/' + cc.al.id);
     $('#vname').textContent = (VIS[list[V.vi]] || VIS.disc)[0] + `（${V.vi + 1}/${list.length}・画面を触ると切り替え）`;
     $('#nplay').textContent = au.paused ? '▶' : '⏸';
   };
@@ -952,6 +1015,7 @@ function screenNow() {
   $('#nnext').onclick  = () => { nextTrack(); setTimeout(paint, 60); };
   $('#nplay').onclick  = () => { au.paused ? au.play() : au.pause(); setTimeout(paint, 60); };
   $('#nq').onclick     = () => go('#/queue');
+  $('#nalb').onclick   = () => { const c2 = cur(); if (c2) go('#/album/' + c2.al.id); };
   $('#npick').onclick  = () => go('#/vis');
   au.addEventListener('play', paint); au.addEventListener('pause', paint);
   au.addEventListener('timeupdate', () => {
@@ -1367,12 +1431,15 @@ async function screenLib() {
                 : albumOffline(al) ? '<span class="badge off">端末</span>' : '';
     const star = isFav('a' + al.id) ? '<span class="badge star">★</span>' : '';
     const y = albumYear(al);
-    return `<button class="al" data-id="${al.id}">
+    return `<div class="al" data-open="${al.id}" role="button" tabindex="0">
       <div class="cov">${cv ? `<img loading="lazy" src="${esc(cv)}" onerror="this.style.display='none'">`
-                            : '<span class="ph">♪</span>'}${badge}${star}</div>
+                            : '<span class="ph">♪</span>'}${badge}${star}
+        <button class="dots" data-menu="${al.id}" aria-label="操作">⋮</button>
+        <button class="go" data-play="${al.id}" aria-label="再生">▶</button>
+      </div>
       <div class="t">${esc(al.name)}</div>
       <div class="a">${esc(al.artist)}${y ? ' · ' + esc(y) : ''} · ${al.tracks.length}曲</div>
-    </button>`;
+    </div>`;
   }).join('')}</div>` + (shown.length ? '' :
     `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
 
@@ -1381,7 +1448,17 @@ async function screenLib() {
   $('#gensel').onchange  = e => { S.genre = e.target.value; LS.set('genre', S.genre); screenLib(); };
   $('#shufAll').onclick  = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
   $('#smart').onclick    = () => go('#/smart');
-  main().querySelectorAll('.al').forEach(b => b.onclick = () => go('#/album/' + b.dataset.id));
+  const byId = id => S.albums.find(a => String(a.id) === String(id));
+  main().querySelectorAll('[data-open]').forEach(b => b.onclick = e => {
+    if (e.target.closest('[data-play],[data-menu]')) return;
+    go('#/album/' + b.dataset.open);
+  });
+  main().querySelectorAll('[data-play]').forEach(b => b.onclick = e => {
+    e.stopPropagation(); const al = byId(b.dataset.play); if (al) play(al, 0);
+  });
+  main().querySelectorAll('[data-menu]').forEach(b => b.onclick = e => {
+    e.stopPropagation(); const al = byId(b.dataset.menu); if (al) albumSheet(al);
+  });
   const stop = $('#swstop'); if (stop) stop.onclick = () => { S.sweep.stop = true; toast('止めます'); };
   updateSweepBar();
 }
@@ -1405,7 +1482,8 @@ function screenAlbum(id) {
           <button class="hbtn" id="pall">▶ 通して聴く</button>
           <button class="hbtn" id="pshuf">🔀</button>
           <button class="hbtn ${fav ? 'on' : ''}" id="fav">${fav ? '★' : '☆'}</button>
-          <button class="hbtn" id="qnext">次に流す</button>
+          <button class="hbtn" id="qnext">次に再生</button>
+          <button class="hbtn" id="qend">列に足す</button>
           <button class="hbtn" id="cov">ジャケット</button>
           <button class="hbtn" id="dl">${albumOffline(al) ? '端末から消す' : '端末に入れる'}</button>
         </div>
@@ -1415,8 +1493,10 @@ function screenAlbum(id) {
       <div class="tk ${P.album && P.album.id === al.id && P.i === i ? 'playing' : ''} ${S.offline[t.id] ? 'cached' : ''}">
         <button class="hit" data-i="${i}"><span class="n">${i + 1}</span><span class="nm">${esc(trackTitle(t))}</span></button>
         <button class="star ${isFav('t' + t.id) ? 'on' : ''}" data-star="${t.id}">${isFav('t' + t.id) ? '★' : '☆'}</button>
+        <button class="dots" data-tmenu="${i}">⋮</button>
       </div>`).join('')}</div>`;
   main().querySelectorAll('[data-i]').forEach(b => b.onclick = () => play(al, +b.dataset.i));
+  main().querySelectorAll('[data-tmenu]').forEach(b => b.onclick = () => trackSheet(al, +b.dataset.tmenu));
   main().querySelectorAll('[data-star]').forEach(b => b.onclick = () => {
     toggleFav('t' + b.dataset.star);
     b.classList.toggle('on'); b.textContent = b.classList.contains('on') ? '★' : '☆';
@@ -1424,30 +1504,61 @@ function screenAlbum(id) {
   $('#pall').onclick  = () => play(al, 0);
   $('#pshuf').onclick = () => startQueue(shuffle(albumRefs(al)), 0);
   $('#qnext').onclick = () => enqueueNext(albumRefs(al));
+  $('#qend').onclick  = () => enqueueEnd(albumRefs(al));
   $('#fav').onclick   = () => { toggleFav('a' + al.id); screenAlbum(id); };
   $('#cov').onclick   = () => go('#/cover/' + al.id);
   $('#dl').onclick    = e => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al, e.currentTarget));
   $('#back').onclick  = () => go('#/lib');
 }
 
-/* いま並んでいるもの */
+/* いま並んでいるもの。YouTube Music の「次に再生」に相当する。 */
 function screenQueue() {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
-  $('#title').textContent = '流れているもの';
+  $('#title').textContent = '次に流れるもの';
   $('#btnCovers').classList.add('hide');
   if (!P.q.length) { main().innerHTML = '<div class="empty">まだ何も流していません</div>'; $('#back').onclick = () => go('#/lib'); return; }
-  main().innerHTML = `
-    <div class="tools"><button class="hbtn" id="qshuf">🔀 並べ直す</button>
-      <button class="hbtn" id="qclear">空にする</button>
-      <span class="a" style="align-self:center">${P.q.length} 曲</span></div>
-    <div>${P.q.map((r, i) => `
-      <button class="tk ${i === P.qi ? 'playing' : ''}" data-q="${i}">
+  const rep = { off: ['↻', '繰り返さない'], all: ['🔁', 'ぜんぶ繰り返す'], one: ['🔂', '1曲を繰り返す'] }[P.repeat];
+  const row = (r, i) => `
+    <div class="tk ${i === P.qi ? 'playing' : ''}">
+      <button class="hit" data-q="${i}">
         <span class="n">${i === P.qi ? '▶' : i + 1}</span>
         <span class="nm">${esc(trackTitle(r.al.tracks[r.i]))}<br>
           <span class="a" style="font-size:11.5px">${esc(r.al.artist)} — ${esc(r.al.name)}</span></span>
-      </button>`).join('')}</div>`;
+      </button>
+      <button class="star" data-up="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+      <button class="star" data-rm="${i}">✕</button>
+    </div>`;
+  const past = P.q.slice(0, P.qi), now = P.q[P.qi], next = P.q.slice(P.qi + 1);
+  main().innerHTML = `
+    <div class="tools">
+      <button class="hbtn" id="qshuf">🔀 並べ直す</button>
+      <button class="hbtn ${P.repeat !== 'off' ? 'on' : ''}" id="qrep">${rep[0]} ${rep[1]}</button>
+      <button class="hbtn" id="qclear">空にする</button>
+    </div>
+    ${now ? `<div class="label" style="color:var(--dim);font-size:12px;margin:4px 0 6px">いま流れている</div>
+      ${row(now, P.qi)}` : ''}
+    ${next.length ? `<div class="label" style="color:var(--dim);font-size:12px;margin:18px 0 6px">
+      次に流れる（${next.length}）</div>${next.map((r, k) => row(r, P.qi + 1 + k)).join('')}` : ''}
+    ${past.length ? `<div class="label" style="color:var(--dim);font-size:12px;margin:18px 0 6px">
+      流し終えた（${past.length}）</div>${past.map((r, k) => row(r, k)).join('')}` : ''}`;
   main().querySelectorAll('[data-q]').forEach(b => b.onclick = () => playAt(+b.dataset.q));
+  main().querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.rm;
+    P.q.splice(i, 1);
+    if (i < P.qi) P.qi--; else if (i === P.qi) P.qi = Math.min(P.qi, P.q.length - 1);
+    paintPlayer(); screenQueue();
+  });
+  main().querySelectorAll('[data-up]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.up; if (i < 1) return;
+    [P.q[i - 1], P.q[i]] = [P.q[i], P.q[i - 1]];
+    if (P.qi === i) P.qi--; else if (P.qi === i - 1) P.qi++;
+    paintPlayer(); screenQueue();
+  });
   $('#qshuf').onclick  = () => { const c = cur(); P.q = shuffle(P.q); P.qi = c ? P.q.indexOf(c) : 0; screenQueue(); };
+  $('#qrep').onclick   = () => {
+    P.repeat = { off: 'all', all: 'one', one: 'off' }[P.repeat];
+    LS.set('repeat', P.repeat); screenQueue();
+  };
   $('#qclear').onclick = () => { P.q = []; P.qi = -1; au.pause(); paintPlayer(); screenQueue(); };
   $('#back').onclick   = () => go('#/lib');
 }
@@ -2104,7 +2215,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v22');
+  L.push('版: v25');
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
   L.push('直接取得: ' + (V.direct === null ? '未確認' : V.direct ? 'できる' : 'できない'));
