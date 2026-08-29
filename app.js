@@ -549,6 +549,7 @@ async function playAt(qi) {
       toast('もう一度押してください（音を出す許可が要ります）', 4000);
     } else {
       toast('再生できません: ' + e.name + ' — ' + (e.message || e), 5000);
+      if (S.relay) diagnoseRelay(t);
     }
     return;
   }
@@ -1677,6 +1678,27 @@ function renderRoute() {
 $('#btnMenu').onclick   = () => go('#/menu');
 $('#btnCovers').onclick = () => sweepCovers(true);
 
+/* 中継所が返しているものを見て、何が起きているかを言い当てる。 */
+async function diagnoseRelay(t) {
+  try {
+    const r = await fetch(relayUrl('/link', t), { referrerPolicy: 'no-referrer' });
+    const ct = r.headers.get('content-type') || '';
+    const body = (await r.text()).slice(0, 160);
+    note('中継所の返事 ' + r.status + ' ' + ct + ' / ' + body.slice(0, 60));
+    if (/Hello World/i.test(body)) {
+      shout('中継所', '中身がまだ Hello World のままです。貼り替えて Deploy し直してください');
+    } else if (!ct.includes('json')) {
+      shout('中継所', r.status + ' ' + ct + ' — ' + body);
+    } else {
+      const j = JSON.parse(body);
+      if (j.error) shout('中継所ごしに pCloud が断りました', (j.result || '') + ' ' + j.error);
+      else shout('中継所', 'リンクは取れています（' + (j.type || '') + '）。音として読めないのは別の理由です');
+    }
+  } catch (e) {
+    shout('中継所につながりません', e.message || String(e));
+  }
+}
+
 /* ============ 取り出し方を総当たりする ============ */
 /* 直リンクも読み出しも断られたので、どれなら通るのかを実ファイルで確かめる。
    公開リンクを作る手は、本人が選んだときだけ試す（外から取れる状態を作るため）。 */
@@ -1851,7 +1873,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v15');
+  L.push('版: v16');
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));

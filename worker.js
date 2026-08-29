@@ -53,7 +53,7 @@ export default {
       linkCache.set(key, hit);
       if (linkCache.size > 300) linkCache.delete(linkCache.keys().next().value);
     }
-    if (url.pathname === '/link') return json({ url: hit.url });
+    if (url.pathname === '/link') return json({ url: hit.url, type: typeOf(hit.url) });
 
     /* 中身を素通しする。頭出し（Range）はそのまま渡さないと、曲の途中に飛べない。 */
     const h = new Headers();
@@ -66,9 +66,23 @@ export default {
     }
     for (const [k, v] of Object.entries(CORS)) out.set(k, v);
     if (!out.get('accept-ranges')) out.set('accept-ranges', 'bytes');
+    /* 種別は拡張子から決めて上書きする。pCloud が application/octet-stream を返すと
+       ブラウザが「対応していない音」と判断して鳴らさない。 */
+    out.set('content-type', typeOf(hit.url));
     return new Response(up.body, { status: up.status, headers: out });
   },
 };
+
+const TYPES = { mp3:'audio/mpeg', m4a:'audio/mp4', m4b:'audio/mp4', mp4:'audio/mp4',
+                aac:'audio/aac', flac:'audio/flac', wav:'audio/wav', ogg:'audio/ogg',
+                opus:'audio/ogg', aif:'audio/aiff', aiff:'audio/aiff', wma:'audio/x-ms-wma' };
+function typeOf(u) {
+  let name = u;
+  try { name = decodeURIComponent(new URL(u).pathname); } catch (e) {}
+  const i = name.lastIndexOf('.');
+  const ext = i > 0 ? name.slice(i + 1).toLowerCase() : '';
+  return TYPES[ext] || 'audio/mpeg';
+}
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
