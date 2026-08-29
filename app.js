@@ -38,7 +38,10 @@ const byName = (a, b) => collator.compare(a.name, b.name);
 /* ============ 保存領域 ============ */
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('pm.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem('pm.' + k, JSON.stringify(v)); } catch (e) {} },
+  set(k, v) {
+    try { localStorage.setItem('pm.' + k, JSON.stringify(v)); return true; }
+    catch (e) { LS.full = true; return false; }   /* 溢れたら黙らせない */
+  },
   del(k)    { try { localStorage.removeItem('pm.' + k); } catch (e) {} },
 };
 
@@ -289,7 +292,14 @@ function rank(cands, al) {
     const i = c.label.indexOf(' / ');
     const cArt = i < 0 ? '' : c.label.slice(0, i), cAlb = i < 0 ? c.label : c.label.slice(i + 3);
     const sArt = me.artist ? overlap(cArt, me.artist) : 0;
-    const sAlb = Math.max(overlap(cAlb, me.album), overlap(cArt + ' ' + cAlb, me.artist + ' ' + me.album));
+    /* アーティスト名を混ぜて照合すると、名前が合うだけの別アルバムに点が乗る
+       （風神雷神 が同じ人の BLOOD を掴んだ）。アーティストが分かっているときは題名だけで見る。 */
+    let sAlb = me.artist ? overlap(cAlb, me.album)
+                         : Math.max(overlap(cAlb, me.album), overlap(cArt + ' ' + cAlb, me.album));
+    /* 連番は題名の一部として効かせる。EAT A CLASSIC と EAT A CLASSIC 7 は別物。 */
+    const serial = t => { const m = normTitle(t).match(/(?:^|\s)(\d{1,2})$/); return m ? m[1] : ''; };
+    const a1 = serial(me.album), a2 = serial(cAlb);
+    if (a1 !== a2) sAlb = Math.max(0, sAlb - (a1 && a2 ? 0.45 : 0.30));
     let sc = wa * sAlb + wn * sArt;
     /* 曲数は強い手がかり。9曲のフォルダにシングル盤のジャケットは付かない。 */
     if (mine >= 4 && c.n) {
@@ -331,21 +341,60 @@ async function findCandidates(term, al) {
   return (al ? rank(out, al) : out).slice(0, 10);
 }
 
-/* 棚ぜんぶを一巡する。止めても続きから。費用は 0 円。 */
+/* 棚ぜんぶを一巡する。止めても続きから。費用は 0 円。
+   1件ずつ引くと1500枚で1〜2時間かかるので、まずアーティスト単位でまとめて引く。
+   iTunes は1回で200件返せるので、同じ人のアルバムは1往復で片が付く。 */
+async function sweepByArtist(targets, groups) {
+  for (const [artist, list] of groups) {
+    if (S.sweep.stop) return;
+    if (!artist || list.length < 2) continue;          // 1枚だけなら普通に引いた方が当たる
+    let pool = [];
+    try {
+      S.sweep.note = artist + ' をまとめて（' + list.length + '枚）';
+      updateSweepBar();
+      pool = await itunesSearch(artist, 200, latinish(artist) ? 'US' : 'JP');
+    } catch (e) { continue; }
+    if (!pool.length) continue;
+    for (const al of list) {
+      if (S.sweep.stop) return;
+      const best = rank(pool, al)[0];
+      if (best && best.score >= SURE) {
+        S.covers[al.id] = { url: best.url, src: best.src, q: albumQuery(al),
+                            manual: false, score: best.score, sure: true };
+        al._done = true; S.sweep.hit++; S.sweep.done++;
+      }
+    }
+    saveCovers();
+    updateSweepBar();
+  }
+}
+
 async function sweepCovers(onlyMissing = true) {
   if (S.sweep) { S.sweep.stop = true; return; }
   const targets = S.albums.filter(a => !(onlyMissing && (S.covers[a.id] || a.folderCover)));
   if (!targets.length) { toast('付いていないジャケットはありません'); return; }
-  S.sweep = { done: 0, total: targets.length, hit: 0, iffy: 0, stop: false };
+  targets.forEach(a => { a._done = false; });
+  const groups = new Map();
+  for (const al of targets) {
+    const k = parseAlbum(al).artist;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(al);
+  }
+  S.sweep = { done: 0, total: targets.length, hit: 0, iffy: 0, stop: false, t0: Date.now(), note: '' };
   renderRoute();
+  await sweepByArtist(targets, [...groups.entries()]);
+  S.sweep.note = '';
   for (const al of targets) {
     if (S.sweep.stop) break;
+    if (al._done) continue;
     const q = albumQuery(al);
     try {
       const cands = await findCandidates(q, al);
       if (cands.length) {
         const top = cands[0];
-        S.covers[al.id] = { url: top.url, src: top.src, q, cands, manual: false,
+        /* 候補一式は持たない。1500件も抱えると端末の記憶（5MB前後）を越え、
+           保存が黙って失敗して結果が残らなくなる。選び直す時に取り直せばよい。 */
+        S.covers[al.id] = { url: top.url, src: top.src, q, manual: false,
                             score: top.score, sure: top.score >= SURE };
         if (top.score >= SURE) S.sweep.hit++; else S.sweep.iffy++;
         saveCovers();
@@ -363,7 +412,15 @@ function updateSweepBar() {
   const s = S.sweep; if (!s) return;
   const bar = $('#swbar'), txt = $('#swtxt');
   if (bar) bar.style.width = (s.done / s.total * 100) + '%';
-  if (txt) txt.textContent = `探しています ${s.done}/${s.total}（確定 ${s.hit}・要確認 ${s.iffy}）`;
+  if (!txt) return;
+  let rest = '';
+  if (s.done > 4) {
+    const per = (Date.now() - s.t0) / s.done;
+    const m = Math.round(per * (s.total - s.done) / 60000);
+    rest = m > 0 ? `・のこり約${m}分` : '・もうすぐ';
+  }
+  txt.textContent = (s.note || `探しています ${s.done}/${s.total}`) +
+                    `（確定 ${s.hit}・要確認 ${s.iffy}${rest}）` + (LS.full ? ' ★端末の記憶が一杯です' : '');
 }
 const coverOf = al => {
   const c = S.covers[al.id];
@@ -866,7 +923,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v7');
+  L.push('版: v8');
   L.push('');
   L.push('― できごと ―');
   L.push(readLog());
