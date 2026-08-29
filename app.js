@@ -54,9 +54,27 @@ const S = {
   albums: [],          // 走査結果（メモリ）
   covers: LS.get('covers', {}),   // { folderid: {url, src, q, cands:[{url,label}], manual} }
   offline: LS.get('offline', {}), // { fileid: 1 }
+  meta:   LS.get('meta', {}),     // { folderid: {g:ジャンル, y:年} }
+  fav:    LS.get('fav', {}),      // { 'a'+folderid | 't'+fileid : 1 }
+  hist:   LS.get('hist', []),     // [{a:アルバム, t:曲, at:時刻}] 新しい順
+  plays:  LS.get('plays', {}),    // { folderid: {n:回数, last:時刻} }
+  lists:  LS.get('lists', {}),    // { 名前: [{a:folderid, t:fileid}] }
   filter: LS.get('filter', 'all'),
+  genre:  LS.get('genre', ''),
+  sort:   LS.get('sort', 'artist'),
   sweep:  null,
 };
+const saveMeta  = () => LS.set('meta', S.meta);
+const saveFav   = () => LS.set('fav', S.fav);
+const savePlays = () => LS.set('plays', S.plays);
+const saveLists = () => LS.set('lists', S.lists);
+const saveHist  = () => LS.set('hist', S.hist.slice(0, 400));
+const isFav = k => !!S.fav[k];
+function toggleFav(k) { if (S.fav[k]) delete S.fav[k]; else S.fav[k] = 1; saveFav(); }
+const albumYear  = al => (S.meta[al.id] || {}).y || '';
+const albumGenre = al => (S.meta[al.id] || {}).g || '';
+const playCount  = al => (S.plays[al.id] || {}).n || 0;
+const lastPlayed = al => (S.plays[al.id] || {}).last || 0;
 /* 何が起きたかの控え。画面が消えても残るので、後から読み返せる。
    パスワードやメールの中身は絶対に残さない（長さだけ）。 */
 function note(what) {
@@ -217,6 +235,8 @@ async function itunesSearch(term, limit = 8, country = 'JP') {
     url: artUrl(x.artworkUrl100, 1200),
     thumb: artUrl(x.artworkUrl100, 300),
     n: x.trackCount || 0,
+    g: x.primaryGenreName || '',
+    y: (x.releaseDate || '').slice(0, 4),
     label: (x.artistName || '') + ' / ' + (x.collectionName || ''),
     src: 'iTunes/' + country,
   }));
@@ -361,10 +381,11 @@ async function sweepByArtist(targets, groups) {
       if (best && best.score >= SURE) {
         S.covers[al.id] = { url: best.url, src: best.src, q: albumQuery(al),
                             manual: false, score: best.score, sure: true };
+        if (best.g || best.y) S.meta[al.id] = { g: best.g || '', y: best.y || '' };
         al._done = true; S.sweep.hit++; S.sweep.done++;
       }
     }
-    saveCovers();
+    saveCovers(); saveMeta();
     updateSweepBar();
   }
 }
@@ -396,6 +417,7 @@ async function sweepCovers(onlyMissing = true) {
            保存が黙って失敗して結果が残らなくなる。選び直す時に取り直せばよい。 */
         S.covers[al.id] = { url: top.url, src: top.src, q, manual: false,
                             score: top.score, sure: top.score >= SURE };
+        if (top.g || top.y) S.meta[al.id] = { g: top.g || '', y: top.y || '' };
         if (top.score >= SURE) S.sweep.hit++; else S.sweep.iffy++;
         saveCovers();
       }
@@ -404,7 +426,7 @@ async function sweepCovers(onlyMissing = true) {
     updateSweepBar();
   }
   const r = S.sweep; S.sweep = null;
-  saveCovers();
+  saveCovers(); saveMeta();
   toast((r.stop ? '中断：' : '') + `${r.hit} / ${r.total} 枚確定、${r.iffy} 枚は要確認`, 3600);
   renderRoute();
 }
@@ -430,8 +452,20 @@ const coverOf = al => {
 };
 
 /* ============ 再生 ============ */
+/* 待ち行列を器にする。アルバムを通して聴くのも、棚全体のシャッフルも、
+   条件で組んだものも、すべて同じ「並んだ曲」として扱う。 */
 const au = $('#au');
-const P = { album: null, i: -1, linkCache: new Map() };
+const P = { q: [], qi: -1, linkCache: new Map(), shuffled: false };
+const cur = () => (P.qi >= 0 ? P.q[P.qi] : null);
+Object.defineProperty(P, 'album', { get: () => (cur() ? cur().al : null) });
+Object.defineProperty(P, 'i',     { get: () => (cur() ? cur().i  : -1) });
+
+const shuffle = arr => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+};
+const albumRefs = al => al.tracks.map((_, i) => ({ al, i }));
 
 async function fileLink(fileid) {
   const hit = P.linkCache.get(fileid);
@@ -447,42 +481,71 @@ async function cachedResponse(fileid) {
   const c = await caches.open('tracks-v1');
   return (await c.match(cacheKey(fileid))) || null;
 }
-async function play(album, i) {
-  P.album = album; P.i = i;
-  const t = album.tracks[i];
+
+/* 聴いた記録。次の一手（条件付きシャッフル）の材料になる。 */
+function remember(al, t) {
+  S.hist.unshift({ a: al.id, t: t.id, at: Date.now() });
+  if (S.hist.length > 400) S.hist.length = 400;
+  const p = S.plays[al.id] || { n: 0, last: 0 };
+  p.n++; p.last = Date.now(); S.plays[al.id] = p;
+  saveHist(); savePlays();
+}
+
+async function playAt(qi) {
+  if (qi < 0 || qi >= P.q.length) return;
+  P.qi = qi;
+  const { al, i } = P.q[qi];
+  const t = al.tracks[i];
   if (!t) return;
   try {
     const hit = await cachedResponse(t.id);
     au.src = hit ? URL.createObjectURL(await hit.blob()) : await fileLink(t.id);
     await au.play();
-  } catch (e) {
-    toast('再生できません: ' + (e.message || e));
-    return;
-  }
+  } catch (e) { toast('再生できません: ' + (e.message || e)); return; }
+  remember(al, t);
   paintPlayer();
   setMediaSession();
-  if (location.hash.startsWith('#/album/')) renderRoute();
+  if (location.hash.startsWith('#/album/') || location.hash === '#/queue') renderRoute();
 }
+function startQueue(list, at = 0) {
+  if (!list.length) { toast('流すものがありません'); return; }
+  P.q = list; P.qi = -1;
+  playAt(at);
+}
+const play = (album, i) => startQueue(albumRefs(album), i);
+function enqueueNext(list) {
+  if (!list.length) return;
+  if (!P.q.length) return startQueue(list, 0);
+  P.q.splice(P.qi + 1, 0, ...list);
+  toast(list.length + ' 曲を次に流します');
+}
+function enqueueEnd(list) {
+  if (!P.q.length) return startQueue(list, 0);
+  P.q.push(...list);
+  toast(list.length + ' 曲を最後に足しました');
+}
+
 const trackTitle = t => t.name.replace(/\.[^.]+$/, '').replace(/^\d+[\s._-]+/, '');
 function paintPlayer() {
-  const p = $('#player');
-  if (!P.album) { p.classList.add('gone'); return; }
+  const p = $('#player'), c = cur();
+  if (!c) { p.classList.add('gone'); return; }
   p.classList.remove('gone');
-  const t = P.album.tracks[P.i];
+  const t = c.al.tracks[c.i];
   $('#pti').textContent = trackTitle(t);
-  $('#par').textContent = [P.album.artist, P.album.name].filter(Boolean).join(' — ');
-  const cv = coverOf(P.album);
+  $('#par').textContent = [c.al.artist, c.al.name].filter(Boolean).join(' — ');
+  const cv = coverOf(c.al);
   $('#pcov').src = cv || '';
   $('#pcov').style.visibility = cv ? 'visible' : 'hidden';
   $('#play').textContent = au.paused ? '▶' : '⏸';
 }
 function setMediaSession() {
-  if (!('mediaSession' in navigator) || !P.album) return;
-  const t = P.album.tracks[P.i], cv = coverOf(P.album);
+  const c = cur();
+  if (!('mediaSession' in navigator) || !c) return;
+  const t = c.al.tracks[c.i], cv = coverOf(c.al);
   navigator.mediaSession.metadata = new MediaMetadata({
     title: trackTitle(t),
-    artist: P.album.artist || '',
-    album: P.album.name,
+    artist: c.al.artist || '',
+    album: c.al.name,
     artwork: cv ? [{ src: cv, sizes: '512x512', type: 'image/jpeg' }] : [],
   });
   const set = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) {} };
@@ -494,11 +557,11 @@ function setMediaSession() {
   set('seekforward',  d => { au.currentTime = au.currentTime + ((d && d.seekOffset) || 15); });
   set('seekto', d => { if (d && d.seekTime != null) au.currentTime = d.seekTime; });
 }
-function nextTrack() { if (P.album && P.i + 1 < P.album.tracks.length) play(P.album, P.i + 1); }
+function nextTrack() { if (P.qi + 1 < P.q.length) playAt(P.qi + 1); }
 function prevTrack() {
-  if (!P.album) return;
+  if (P.qi < 0) return;
   if (au.currentTime > 3) { au.currentTime = 0; return; }
-  if (P.i > 0) play(P.album, P.i - 1);
+  if (P.qi > 0) playAt(P.qi - 1);
 }
 au.addEventListener('ended', nextTrack);
 au.addEventListener('play',  paintPlayer);
@@ -513,6 +576,8 @@ au.addEventListener('timeupdate', () => {
 $('#play').onclick = () => (au.paused ? au.play() : au.pause());
 $('#next').onclick = nextTrack;
 $('#prev').onclick = prevTrack;
+$('#pcov').onclick = () => go('#/queue');
+$('#pti').onclick  = () => { const c = cur(); if (c) go('#/album/' + c.al.id); };
 
 /* ============ オフライン保存 ============ */
 /* 直リンクが CORS を返さない場合に備え、api 経由の読み出しに落ちる道を用意する。 */
@@ -565,7 +630,8 @@ const albumOffline = al => al.tracks.length > 0 && al.tracks.every(t => S.offlin
 /* ============ 索引を pCloud に置く（端末をまたぐため） ============ */
 const INDEX_NAME = '音楽棚.json';
 async function saveIndexToCloud() {
-  const body = JSON.stringify({ v: 1, rootId: S.rootId, covers: S.covers, at: new Date().toISOString() });
+  const body = JSON.stringify({ v: 2, rootId: S.rootId, covers: S.covers, meta: S.meta,
+                                fav: S.fav, lists: S.lists, at: new Date().toISOString() });
   const fd = new FormData();
   fd.append('file', new Blob([body], { type: 'application/json' }), INDEX_NAME);
   const u = new URL('https://' + S.host + '/uploadfile');
@@ -583,7 +649,13 @@ async function loadIndexFromCloud() {
   if (!f) return false;
   const link = await fetch(await fileLink(f.fileid));
   const j = await link.json();
-  if (j && j.covers) { S.covers = Object.assign({}, j.covers, S.covers); saveCovers(); return true; }
+  if (j && j.covers) {
+    S.covers = Object.assign({}, j.covers, S.covers); saveCovers();
+    if (j.meta)  { S.meta  = Object.assign({}, j.meta,  S.meta);  saveMeta(); }
+    if (j.fav)   { S.fav   = Object.assign({}, j.fav,   S.fav);   saveFav(); }
+    if (j.lists) { S.lists = Object.assign({}, j.lists, S.lists); saveLists(); }
+    return true;
+  }
   return false;
 }
 
@@ -690,6 +762,39 @@ async function screenPick(folderid) {
   $('#back').onclick = () => (folderid === 0 || folderid === '0' ? go('#/lib') : history.back());
 }
 
+/* 絞り込みと並び替え。1535枚あると「何を出すか」を決める道具が本体になる。 */
+const FILTERS = {
+  all:    ['すべて',        () => true],
+  fav:    ['★',            al => isFav('a' + al.id)],
+  recent: ['最近聴いた',    al => lastPlayed(al) > 0],
+  off:    ['端末',          al => albumOffline(al)],
+  iffy:   ['要確認',        al => { const c = S.covers[al.id]; return c && !c.manual && c.sure === false; }],
+  none:   ['ジャケット無し', al => !coverOf(al)],
+};
+const SORTS = {
+  artist:  ['アーティスト順', (a, b) => collator.compare(a.artist + a.name, b.artist + b.name)],
+  name:    ['アルバム名順',   (a, b) => collator.compare(a.name, b.name)],
+  yearNew: ['新しい順',       (a, b) => (albumYear(b) || '0000').localeCompare(albumYear(a) || '0000')],
+  yearOld: ['古い順',         (a, b) => (albumYear(a) || '9999').localeCompare(albumYear(b) || '9999')],
+  tracks:  ['曲数の多い順',   (a, b) => b.tracks.length - a.tracks.length],
+  last:    ['最近聴いた順',   (a, b) => lastPlayed(b) - lastPlayed(a)],
+  most:    ['よく聴く順',     (a, b) => playCount(b) - playCount(a)],
+};
+function genreList() {
+  const m = new Map();
+  for (const al of S.albums) {
+    const g = albumGenre(al); if (!g) continue;
+    m.set(g, (m.get(g) || 0) + 1);
+  }
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+function shownAlbums() {
+  const f = (FILTERS[S.filter] || FILTERS.all)[1];
+  let list = S.albums.filter(f);
+  if (S.genre) list = list.filter(al => albumGenre(al) === S.genre);
+  return list.sort((SORTS[S.sort] || SORTS.artist)[1]);
+}
+
 async function screenLib() {
   $('#hdr').classList.remove('hide');
   $('#title').textContent = S.rootName || '音楽棚';
@@ -707,36 +812,47 @@ async function screenLib() {
   }
   const sw = S.sweep ? `<div class="sweep"><div class="bar"><i id="swbar"></i></div>
       <span id="swtxt"></span><button class="hbtn" id="swstop">やめる</button></div>` : '';
-  /* 手直しの入口。全部を見返すのではなく、怪しいものだけ見る。 */
-  const F = {
-    all:  () => true,
-    iffy: al => { const c = S.covers[al.id]; return c && !c.manual && c.sure === false; },
-    none: al => !coverOf(al),
-    off:  al => albumOffline(al),
-  };
-  const counts = { all: S.albums.length, iffy: S.albums.filter(F.iffy).length,
-                   none: S.albums.filter(F.none).length, off: S.albums.filter(F.off).length };
-  const labels = { all: 'すべて', iffy: '要確認', none: 'ジャケット無し', off: '端末' };
-  const shown = S.albums.filter(F[S.filter] || F.all);
-  const chips = `<div style="display:flex;gap:7px;overflow-x:auto;margin-bottom:13px;padding-bottom:2px">` +
-    Object.keys(labels).map(k => `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]} ${counts[k]}</button>`).join('') +
+  const counts = {};
+  for (const k of Object.keys(FILTERS)) counts[k] = S.albums.filter(FILTERS[k][1]).length;
+  const chips = `<div class="chips">` +
+    Object.keys(FILTERS).map(k =>
+      `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${FILTERS[k][0]} ${counts[k]}</button>`).join('') +
     `</div>`;
-  main().innerHTML = sw + chips + `<div class="grid">${shown.map(al => {
+  const gl = genreList();
+  const bar = `<div class="tools">
+      <select id="sortsel">${Object.keys(SORTS).map(k =>
+        `<option value="${k}"${S.sort === k ? ' selected' : ''}>${SORTS[k][0]}</option>`).join('')}</select>
+      <select id="gensel">
+        <option value="">ジャンル：すべて</option>
+        ${gl.map(([g, n]) => `<option value="${esc(g)}"${S.genre === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}
+      </select>
+      <button class="hbtn" id="shufAll">🔀 シャッフル</button>
+      <button class="hbtn" id="smart">条件で組む</button>
+    </div>`;
+  const shown = shownAlbums();
+  main().innerHTML = sw + chips + bar + `<div class="grid">${shown.map(al => {
     const cv = coverOf(al), c = S.covers[al.id];
     const badge = c && !c.manual && c.sure === false ? '<span class="badge auto">要確認</span>'
                 : albumOffline(al) ? '<span class="badge off">端末</span>' : '';
+    const star = isFav('a' + al.id) ? '<span class="badge star">★</span>' : '';
+    const y = albumYear(al);
     return `<button class="al" data-id="${al.id}">
       <div class="cov">${cv ? `<img loading="lazy" src="${esc(cv)}" onerror="this.style.display='none'">`
-                            : '<span class="ph">♪</span>'}${badge}</div>
+                            : '<span class="ph">♪</span>'}${badge}${star}</div>
       <div class="t">${esc(al.name)}</div>
-      <div class="a">${esc(al.artist)} · ${al.tracks.length}曲</div>
+      <div class="a">${esc(al.artist)}${y ? ' · ' + y : ''} · ${al.tracks.length}曲</div>
     </button>`;
   }).join('')}</div>` + (shown.length ? '' :
     `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
+
   main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => { S.filter = b.dataset.f; LS.set('filter', S.filter); screenLib(); });
-  updateSweepBar();
-  const stop = $('#swstop'); if (stop) stop.onclick = () => { S.sweep.stop = true; toast('止めます'); };
+  $('#sortsel').onchange = e => { S.sort = e.target.value; LS.set('sort', S.sort); screenLib(); };
+  $('#gensel').onchange  = e => { S.genre = e.target.value; LS.set('genre', S.genre); screenLib(); };
+  $('#shufAll').onclick  = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
+  $('#smart').onclick    = () => go('#/smart');
   main().querySelectorAll('.al').forEach(b => b.onclick = () => go('#/album/' + b.dataset.id));
+  const stop = $('#swstop'); if (stop) stop.onclick = () => { S.sweep.stop = true; toast('止めます'); };
+  updateSweepBar();
 }
 
 function screenAlbum(id) {
@@ -745,31 +861,137 @@ function screenAlbum(id) {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = al.name;
   $('#btnCovers').classList.add('hide');
-  const cv = coverOf(al);
+  const cv = coverOf(al), fav = isFav('a' + al.id);
+  const g = albumGenre(al), y = albumYear(al), pc = playCount(al);
   main().innerHTML = `
     <div class="albumhead">
       <div class="cov">${cv ? `<img src="${esc(cv)}">` : '<span class="ph">♪</span>'}</div>
       <div class="meta">
         <h2>${esc(al.name)}</h2>
         <div class="a">${esc(al.artist)}</div>
-        <div class="a">${al.tracks.length} 曲</div>
+        <div class="a">${[g, y, al.tracks.length + ' 曲', pc ? '聴いた ' + pc + ' 回' : ''].filter(Boolean).join(' · ')}</div>
         <div class="acts">
           <button class="hbtn" id="pall">▶ 通して聴く</button>
+          <button class="hbtn" id="pshuf">🔀</button>
+          <button class="hbtn ${fav ? 'on' : ''}" id="fav">${fav ? '★' : '☆'}</button>
+          <button class="hbtn" id="qnext">次に流す</button>
           <button class="hbtn" id="cov">ジャケット</button>
           <button class="hbtn" id="dl">${albumOffline(al) ? '端末から消す' : '端末に入れる'}</button>
         </div>
       </div>
     </div>
     <div>${al.tracks.map((t, i) => `
-      <button class="tk ${P.album && P.album.id === al.id && P.i === i ? 'playing' : ''} ${S.offline[t.id] ? 'cached' : ''}" data-i="${i}">
-        <span class="n">${i + 1}</span><span class="nm">${esc(trackTitle(t))}</span>
-        <span class="d">${t.size ? Math.round(t.size / 1048576) + 'MB' : ''}</span>
+      <div class="tk ${P.album && P.album.id === al.id && P.i === i ? 'playing' : ''} ${S.offline[t.id] ? 'cached' : ''}">
+        <button class="hit" data-i="${i}"><span class="n">${i + 1}</span><span class="nm">${esc(trackTitle(t))}</span></button>
+        <button class="star ${isFav('t' + t.id) ? 'on' : ''}" data-star="${t.id}">${isFav('t' + t.id) ? '★' : '☆'}</button>
+      </div>`).join('')}</div>`;
+  main().querySelectorAll('[data-i]').forEach(b => b.onclick = () => play(al, +b.dataset.i));
+  main().querySelectorAll('[data-star]').forEach(b => b.onclick = () => {
+    toggleFav('t' + b.dataset.star);
+    b.classList.toggle('on'); b.textContent = b.classList.contains('on') ? '★' : '☆';
+  });
+  $('#pall').onclick  = () => play(al, 0);
+  $('#pshuf').onclick = () => startQueue(shuffle(albumRefs(al)), 0);
+  $('#qnext').onclick = () => enqueueNext(albumRefs(al));
+  $('#fav').onclick   = () => { toggleFav('a' + al.id); screenAlbum(id); };
+  $('#cov').onclick   = () => go('#/cover/' + al.id);
+  $('#dl').onclick    = e => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al, e.currentTarget));
+  $('#back').onclick  = () => go('#/lib');
+}
+
+/* いま並んでいるもの */
+function screenQueue() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '流れているもの';
+  $('#btnCovers').classList.add('hide');
+  if (!P.q.length) { main().innerHTML = '<div class="empty">まだ何も流していません</div>'; $('#back').onclick = () => go('#/lib'); return; }
+  main().innerHTML = `
+    <div class="tools"><button class="hbtn" id="qshuf">🔀 並べ直す</button>
+      <button class="hbtn" id="qclear">空にする</button>
+      <span class="a" style="align-self:center">${P.q.length} 曲</span></div>
+    <div>${P.q.map((r, i) => `
+      <button class="tk ${i === P.qi ? 'playing' : ''}" data-q="${i}">
+        <span class="n">${i === P.qi ? '▶' : i + 1}</span>
+        <span class="nm">${esc(trackTitle(r.al.tracks[r.i]))}<br>
+          <span class="a" style="font-size:11.5px">${esc(r.al.artist)} — ${esc(r.al.name)}</span></span>
       </button>`).join('')}</div>`;
-  main().querySelectorAll('.tk').forEach(b => b.onclick = () => play(al, +b.dataset.i));
-  $('#pall').onclick = () => play(al, 0);
-  $('#cov').onclick  = () => go('#/cover/' + al.id);
-  $('#dl').onclick   = e => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al, e.currentTarget));
+  main().querySelectorAll('[data-q]').forEach(b => b.onclick = () => playAt(+b.dataset.q));
+  $('#qshuf').onclick  = () => { const c = cur(); P.q = shuffle(P.q); P.qi = c ? P.q.indexOf(c) : 0; screenQueue(); };
+  $('#qclear').onclick = () => { P.q = []; P.qi = -1; au.pause(); paintPlayer(); screenQueue(); };
+  $('#back').onclick   = () => go('#/lib');
+}
+
+/* 条件で組む。1535枚を死蔵させないための本命。 */
+const SMART = LS.get('smart', { fav: false, unheard: false, stale: false, off: false, spread: true, n: 60 });
+function screenSmart() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '条件で組む';
+  $('#btnCovers').classList.add('hide');
+  const gl = genreList();
+  const row = (k, label, sub) => `
+    <button class="row" data-k="${k}">
+      <span class="nm">${label}${sub ? `<br><span class="sub">${sub}</span>` : ''}</span>
+      <span class="chk ${SMART[k] ? 'on' : ''}">${SMART[k] ? '✓' : ''}</span>
+    </button>`;
+  main().innerHTML = `
+    <div class="rowlist">
+      ${row('fav', '★ を付けたものだけ')}
+      ${row('unheard', 'まだ聴いていないもの', '買ったまま忘れている盤が出てきます')}
+      ${row('stale', '30日以上開いていないもの', '棚を死蔵させないための条件')}
+      ${row('off', '端末に入れてあるものだけ', '圏外用。通信を当てにしません')}
+      ${row('spread', '同じアーティストを続けない')}
+    </div>
+    <div class="tools" style="margin-top:14px">
+      <select id="sg"><option value="">ジャンル：すべて</option>
+        ${gl.map(([g, n]) => `<option value="${esc(g)}"${SMART.g === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}</select>
+      <select id="sd"><option value="">年代：すべて</option>
+        ${['1960','1970','1980','1990','2000','2010','2020'].map(d =>
+          `<option value="${d}"${SMART.d === d ? ' selected' : ''}>${d}年代</option>`).join('')}</select>
+      <select id="sn">${[20, 40, 60, 100, 200].map(n =>
+        `<option value="${n}"${SMART.n === n ? ' selected' : ''}>${n} 曲</option>`).join('')}</select>
+    </div>
+    <div style="height:14px"></div>
+    <button class="primary" id="build">この条件で流す</button>
+    <div class="msg" id="sm"></div>
+    <div class="note" style="padding:0 2px">条件は端末に覚えさせます。次に開いたときも同じ状態から始められます。</div>`;
+  main().querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+    SMART[b.dataset.k] = !SMART[b.dataset.k]; LS.set('smart', SMART); screenSmart();
+  });
+  $('#sg').onchange = e => { SMART.g = e.target.value; LS.set('smart', SMART); };
+  $('#sd').onchange = e => { SMART.d = e.target.value; LS.set('smart', SMART); };
+  $('#sn').onchange = e => { SMART.n = +e.target.value; LS.set('smart', SMART); };
+  $('#build').onclick = () => {
+    const list = buildSmart();
+    if (!list.length) { $('#sm').className = 'msg err'; $('#sm').textContent = '条件に合う曲がありません。少し緩めてください'; return; }
+    startQueue(list, 0); go('#/queue');
+  };
   $('#back').onclick = () => go('#/lib');
+}
+function buildSmart() {
+  const now = Date.now(), MONTH = 30 * 864e5;
+  let als = S.albums.filter(al => {
+    if (SMART.fav && !isFav('a' + al.id)) return false;
+    if (SMART.unheard && playCount(al) > 0) return false;
+    if (SMART.stale && lastPlayed(al) > now - MONTH) return false;
+    if (SMART.off && !albumOffline(al)) return false;
+    if (SMART.g && albumGenre(al) !== SMART.g) return false;
+    if (SMART.d) { const y = +albumYear(al); if (!y || y < +SMART.d || y >= +SMART.d + 10) return false; }
+    return true;
+  });
+  let refs = shuffle(als.flatMap(albumRefs));
+  if (SMART.spread) {
+    /* 同じアーティストが続かないように、後ろへ送りながら取り出す */
+    const out = [], pool = refs.slice();
+    let lastArtist = null;
+    while (pool.length && out.length < SMART.n) {
+      let k = pool.findIndex(r => (r.al.artist || r.al.name) !== lastArtist);
+      if (k < 0) k = 0;
+      const r = pool.splice(k, 1)[0];
+      out.push(r); lastArtist = r.al.artist || r.al.name;
+    }
+    return out;
+  }
+  return refs.slice(0, SMART.n);
 }
 
 async function screenCover(id) {
@@ -803,6 +1025,7 @@ async function screenCover(id) {
     main().querySelectorAll('.cand').forEach(b => b.onclick = () => {
       const c = cands[+b.dataset.i];
       S.covers[al.id] = { url: c.url, src: c.src, q: $('#q').value, cands, manual: true, sure: true };
+      if (c.g || c.y) { S.meta[al.id] = { g: c.g || '', y: c.y || '' }; saveMeta(); }
       saveCovers(); toast('決めました'); go('#/album/' + al.id);
     });
     const rs = $('#rs'); if (rs) rs.onclick = async () => {
@@ -834,6 +1057,106 @@ async function screenCover(id) {
   $('#back').onclick = () => go('#/album/' + al.id);
 }
 
+/* プレイリスト。索引に混ぜて pCloud 経由で端末をまたがせる。 */
+function screenLists() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = 'プレイリスト';
+  $('#btnCovers').classList.add('hide');
+  const names = Object.keys(S.lists);
+  main().innerHTML = `
+    ${P.q.length ? `<button class="primary" id="fromq">いま流れている ${P.q.length} 曲を保存する</button><div style="height:16px"></div>` : ''}
+    <div class="rowlist">${names.map(n => `
+      <button class="row" data-n="${esc(n)}">
+        <span class="nm">${esc(n)}<br><span class="sub">${S.lists[n].length} 曲</span></span>
+        <span class="sub">›</span>
+      </button>`).join('') || '<div class="empty">まだありません</div>'}</div>
+    <div class="note" style="padding:0 2px">曲そのものは複製しません。棚のどの曲かを覚えているだけなので、いくつ作っても軽いままです。</div>`;
+  const fq = $('#fromq');
+  if (fq) fq.onclick = () => {
+    const n = prompt('名前を付けてください', new Date().toLocaleDateString('ja-JP') + ' の組み合わせ');
+    if (!n) return;
+    S.lists[n] = P.q.map(r => ({ a: r.al.id, t: r.al.tracks[r.i].id }));
+    saveLists(); toast('保存しました'); screenLists();
+  };
+  main().querySelectorAll('[data-n]').forEach(b => b.onclick = () => {
+    const n = b.dataset.n, refs = [];
+    for (const e of S.lists[n]) {
+      const al = S.albums.find(x => String(x.id) === String(e.a));
+      if (!al) continue;
+      const i = al.tracks.findIndex(t => String(t.id) === String(e.t));
+      if (i >= 0) refs.push({ al, i });
+    }
+    if (!refs.length) { toast('棚の中に見つかりませんでした'); return; }
+    startQueue(refs, 0); go('#/queue');
+  });
+  $('#back').onclick = () => go('#/lib');
+}
+
+function screenHistory() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '聴いた履歴';
+  $('#btnCovers').classList.add('hide');
+  const rows = S.hist.slice(0, 120).map(h => {
+    const al = S.albums.find(x => String(x.id) === String(h.a));
+    if (!al) return '';
+    const i = al.tracks.findIndex(t => String(t.id) === String(h.t));
+    if (i < 0) return '';
+    const d = new Date(h.at);
+    return `<button class="tk" data-a="${al.id}" data-i="${i}">
+      <span class="nm">${esc(trackTitle(al.tracks[i]))}<br>
+        <span class="a" style="font-size:11.5px">${esc(al.artist)} — ${esc(al.name)}</span></span>
+      <span class="d">${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</span>
+    </button>`;
+  }).join('');
+  main().innerHTML = rows || '<div class="empty">まだ何も聴いていません</div>';
+  main().querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
+    const al = S.albums.find(x => String(x.id) === String(b.dataset.a));
+    if (al) play(al, +b.dataset.i);
+  });
+  $('#back').onclick = () => go('#/lib');
+}
+
+/* ジャンルと年だけを集め直す。ジャケットは触らない。
+   アーティスト単位なので1535枚でも往復は200回ほどで済む。 */
+async function sweepMeta() {
+  if (S.sweep) { S.sweep.stop = true; return; }
+  const targets = S.albums.filter(al => !S.meta[al.id]);
+  if (!targets.length) { toast('全部そろっています'); return; }
+  const groups = new Map();
+  for (const al of targets) {
+    const k = parseAlbum(al).artist;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(al);
+  }
+  S.sweep = { done: 0, total: targets.length, hit: 0, iffy: 0, stop: false, t0: Date.now(), note: '' };
+  go('#/lib');
+  for (const [artist, list] of groups) {
+    if (S.sweep.stop) break;
+    S.sweep.note = 'ジャンルを集めています：' + (artist || '（名前なし）');
+    updateSweepBar();
+    let pool = [];
+    if (artist) {
+      try { pool = await itunesSearch(artist, 200, latinish(artist) ? 'US' : 'JP'); } catch (e) {}
+    }
+    for (const al of list) {
+      if (S.sweep.stop) break;
+      let best = pool.length ? rank(pool, al)[0] : null;
+      if (!best || best.score < SURE) {
+        try { best = (await findCandidates(albumQuery(al), al))[0]; } catch (e) { best = null; }
+      }
+      if (best && best.score >= SURE && (best.g || best.y)) {
+        S.meta[al.id] = { g: best.g || '', y: best.y || '' };
+        S.sweep.hit++;
+      }
+      S.sweep.done++;
+    }
+    saveMeta(); updateSweepBar();
+  }
+  const r = S.sweep; S.sweep = null; saveMeta();
+  toast(`${r.hit} 枚にジャンルと年を入れました`, 3200);
+  renderRoute();
+}
+
 function screenMenu() {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = '設定';
@@ -844,6 +1167,9 @@ function screenMenu() {
       <button class="row" id="rescan"><span class="nm">棚を読み直す</span><span class="sub">${S.albums.length} アルバム</span></button>
       <button class="row" id="sweep"><span class="nm">ジャケットを一巡して探す</span><span class="sub">${c} 枚</span></button>
       <button class="row" id="sweepall"><span class="nm">自動で付けた分を探し直す</span></button>
+      <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
+      <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
+      <button class="row" id="hist"><span class="nm">聴いた履歴</span><span class="sub">${S.hist.length} 件</span></button>
       <button class="row" id="save"><span class="nm">索引を pCloud に控える</span><span class="sub">${INDEX_NAME}</span></button>
       <button class="row" id="load"><span class="nm">索引を pCloud から取り込む</span></button>
       <button class="row" id="pick"><span class="nm">音楽フォルダを選び直す</span><span class="sub">${esc(S.rootName)}</span></button>
@@ -858,6 +1184,9 @@ function screenMenu() {
     for (const [k, v] of Object.entries(S.covers)) if (!v.manual) delete S.covers[k];
     saveCovers(); go('#/lib'); setTimeout(() => sweepCovers(true), 60);
   };
+  $('#meta').onclick  = () => sweepMeta();
+  $('#lists').onclick = () => go('#/lists');
+  $('#hist').onclick  = () => go('#/history');
   $('#save').onclick = async () => { try { await saveIndexToCloud(); toast('控えました'); } catch (e) { toast('控えられません: ' + e.message); } };
   $('#load').onclick = async () => { try { toast(await loadIndexFromCloud() ? '取り込みました' : '控えがありません'); renderRoute(); } catch (e) { toast(e.message); } };
   $('#pick').onclick = () => go('#/pick/0');
@@ -883,6 +1212,10 @@ function renderRoute() {
   if (h.startsWith('#/album/'))  return screenAlbum(h.slice(8));
   if (h.startsWith('#/cover/'))  return screenCover(h.slice(8));
   if (h === '#/menu')            return screenMenu();
+  if (h === '#/queue')           return screenQueue();
+  if (h === '#/smart')           return screenSmart();
+  if (h === '#/lists')           return screenLists();
+  if (h === '#/history')         return screenHistory();
   if (!S.rootId) return screenPick(0);
   return screenLib();
 }
@@ -923,7 +1256,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v8');
+  L.push('版: v9');
   L.push('');
   L.push('― できごと ―');
   L.push(readLog());
