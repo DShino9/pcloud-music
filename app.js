@@ -54,6 +54,17 @@ const S = {
   filter: LS.get('filter', 'all'),
   sweep:  null,
 };
+/* 何が起きたかの控え。画面が消えても残るので、後から読み返せる。
+   パスワードやメールの中身は絶対に残さない（長さだけ）。 */
+function note(what) {
+  try {
+    const a = LS.get('log', []);
+    a.push(new Date().toLocaleTimeString('ja-JP') + ' ' + what);
+    LS.set('log', a.slice(-15));
+  } catch (e) {}
+}
+const readLog = () => (LS.get('log', []).join('\n') || '（記録なし）');
+
 const saveCovers  = () => LS.set('covers', S.covers);
 const saveOffline = () => LS.set('offline', S.offline);
 
@@ -102,8 +113,13 @@ async function login(email, password, say = () => {}) {
       say(host + ' に問い合わせています…');
       const dg = await api('getdigest', {}, host);
       const pd = await sha1hex(password + (await sha1hex(email.toLowerCase())) + dg.digest);
+      /* logout=1 は付けない。合鍵をその場で無効にしうる余計な指示で、要らない。 */
       const r = await api('userinfo',
-        { getauth: 1, logout: 1, username: email, digest: dg.digest, passworddigest: pd }, host);
+        { getauth: 1, username: email, digest: dg.digest, passworddigest: pd }, host);
+      /* 返事が result 0 でも合鍵が入っていないことがある。
+         ここで黙って先に進むと、画面の振り分けが「未ログイン」と判断して
+         ログイン画面を組み直し、入力も文字も消えて無言になる（実際に起きた）。 */
+      if (!r.auth) throw new PCloudError(-6, 'pCloud が合鍵を返しませんでした');
       S.host = host; S.auth = r.auth; S.email = r.email || email;
       LS.set('host', host); LS.set('auth', r.auth); LS.set('email', S.email);
       return r;
@@ -509,6 +525,7 @@ function loginHint(e) {
   return e.message || 'つながりません';
 }
 
+let lastMsg = null;   // 画面を組み直しても直前の言葉を消さないため
 function screenLogin() {
   $('#hdr').classList.add('hide');
   main().innerHTML = `
@@ -520,17 +537,21 @@ function screenLogin() {
       <div class="field"><label>パスワード</label>
         <input id="pw" type="password" autocomplete="current-password"></div>
       <button class="primary" id="go">つなぐ</button>
-      <div class="msg" id="m"></div>
+      <div class="msg${lastMsg && lastMsg.cls ? ' ' + lastMsg.cls : ''}" id="m">${lastMsg ? esc(lastMsg.text) : ''}</div>
       <button class="hbtn" id="diag" style="margin-top:14px;width:100%;padding:9px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);font-size:12.5px;color:var(--dim)">つながりを調べる</button>
       <pre id="diagout" class="hide" style="white-space:pre-wrap;font-size:11.5px;color:var(--dim);background:#0c0c10;border:1px solid var(--line);border-radius:9px;padding:11px;margin-top:10px;line-height:1.7"></pre>
       <div class="note">パスワードはこの端末の中でだけ使われ、保存されません。
       pCloud へ送られるのは、パスワードそのものではなく毎回変わる符丁です。
       以後この端末には接続用の合鍵だけが残ります。</div>
     </div>`;
-  const say = (t, cls) => { const m = $('#m'); if (m) { m.className = 'msg' + (cls ? ' ' + cls : ''); m.textContent = t; } };
+  const say = (t, cls) => {
+    lastMsg = { text: t, cls: cls || '' };
+    const m = $('#m'); if (m) { m.className = 'msg' + (cls ? ' ' + cls : ''); m.textContent = t; }
+  };
   const run = async () => {
     const em = $('#em').value.trim(), pw = $('#pw').value;
     /* 黙って帰らない。押して何も起きないのが一番困る。 */
+    note('つなぐを押した（メール' + em.length + '文字 / パスワード' + pw.length + '文字）');
     if (!em && !pw) return say('メールアドレスとパスワードを入れてください', 'err');
     if (!em) return say('メールアドレスが空です', 'err');
     if (!pw) return say('パスワードが空です', 'err');
@@ -538,10 +559,12 @@ function screenLogin() {
     say('符丁を作っています…');
     try {
       await login(em, pw, say);
+      note('入れた（合鍵 ' + String(S.auth).length + '文字）');
       $('#pw').value = '';
       say('入れました。棚を開きます…', 'ok');
       go(S.rootId ? '#/lib' : '#/pick/0');
     } catch (e) {
+      note('駄目だった: code=' + e.code + ' ' + (e.message || ''));
       $('#m').className = 'msg err';
       $('#m').innerHTML = esc(loginHint(e)) +
         (e.code > 0 ? `<br><span style="color:var(--dim);font-size:11.5px">pCloud の返事: ${e.code} — ${esc(e.message)}</span>` : '');
@@ -765,7 +788,14 @@ function screenMenu() {
 
 function renderRoute() {
   const h = location.hash || '';
-  if (!S.auth) { screenLogin(); return; }
+  if (!S.auth) {
+    if (h && h !== '#/login') {
+      note('合鍵が無いのでログイン画面に戻した（' + h + '）');
+      lastMsg = { text: '合鍵が残らなかったので、もう一度お願いします', cls: 'err' };
+    }
+    screenLogin();
+    return;
+  }
   if (h.startsWith('#/pick/'))   return screenPick(h.slice(7));
   if (h.startsWith('#/album/'))  return screenAlbum(h.slice(8));
   if (h.startsWith('#/cover/'))  return screenCover(h.slice(8));
@@ -810,11 +840,15 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v3');
+  L.push('版: v5');
+  L.push('');
+  L.push('― できごと ―');
+  L.push(readLog());
   return L.join('\n');
 }
 
 /* ============ 起動 ============ */
+note('画面を開いた（' + (location.hash || 'ハッシュなし') + '）');
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 }
