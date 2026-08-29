@@ -491,20 +491,65 @@ function remember(al, t) {
   saveHist(); savePlays();
 }
 
+/* ブラウザは「利用者が押した、その場で始まる音」しか鳴らさない。
+   曲のURLを取りに行く待ちが入ると操作の資格が切れるので、
+   最初に触った瞬間に無音を一度鳴らして資格を取っておく。 */
+const SILENT = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+let unlocked = false;
+function unlockAudio() {
+  if (unlocked || au.src) return;
+  unlocked = true;
+  try {
+    au.muted = true; au.src = SILENT;
+    const pr = au.play();
+    if (pr && pr.then) pr.then(() => {
+                           if (au.src === SILENT) au.pause();   /* 本物が入っていたら止めない */
+                           au.muted = false; note('音を出す資格を取った');
+                         })
+                         .catch(e => { au.muted = false; unlocked = false; note('資格を取れない: ' + e.name); });
+  } catch (e) { au.muted = false; unlocked = false; }
+}
+addEventListener('pointerdown', unlockAudio, true);
+addEventListener('touchstart', unlockAudio, true);
+addEventListener('pointerdown', () => {
+  if (pending == null) return;
+  const q = pending; pending = null;
+  au.play().catch(() => playAt(q));
+}, true);
+
+let pending = null;   // 資格が無くて鳴らせなかったもの
 async function playAt(qi) {
   if (qi < 0 || qi >= P.q.length) return;
   P.qi = qi;
   const { al, i } = P.q[qi];
   const t = al.tracks[i];
   if (!t) return;
+  let src = null;
   try {
     const hit = await cachedResponse(t.id);
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
     au.crossOrigin = (V.ok && !hit) ? 'anonymous' : null;
-    au.src = hit ? URL.createObjectURL(await hit.blob()) : await fileLink(t.id);
+    src = hit ? URL.createObjectURL(await hit.blob()) : await fileLink(t.id);
+  } catch (e) {
+    note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
+    toast('曲の場所が分かりません: ' + (e.message || e), 4000);
+    return;
+  }
+  try {
+    au.src = src;
     await au.play();
-  } catch (e) { toast('再生できません: ' + (e.message || e)); return; }
+    pending = null;
+  } catch (e) {
+    note('鳴らせない: ' + e.name + ' ' + (e.message || ''));
+    if (e.name === 'NotAllowedError') {
+      pending = qi;
+      toast('もう一度押してください（音を出す許可が要ります）', 4000);
+    } else {
+      toast('再生できません: ' + e.name + ' — ' + (e.message || e), 5000);
+    }
+    return;
+  }
   remember(al, t);
   paintPlayer();
   setMediaSession();
@@ -566,6 +611,15 @@ function prevTrack() {
   if (au.currentTime > 3) { au.currentTime = 0; return; }
   if (P.qi > 0) playAt(P.qi - 1);
 }
+/* 形式が合わない・読めない、は play() の失敗ではなく要素の error に出る。 */
+au.addEventListener('error', () => {
+  const e = au.error; if (!e || au.src === SILENT) return;
+  const why = { 1:'読み込みを中断した', 2:'通信が切れた', 3:'音の中身を解けない',
+                4:'この形式は再生できません' }[e.code] || ('error ' + e.code);
+  const c = cur(), nm = c ? c.al.tracks[c.i].name : '';
+  note('音が鳴らない: ' + why + ' / ' + nm.slice(-24));
+  toast(why + (e.code === 4 ? '（' + nm.split('.').pop() + '）' : ''), 5000);
+});
 au.addEventListener('ended', nextTrack);
 au.addEventListener('play',  paintPlayer);
 au.addEventListener('pause', paintPlayer);
@@ -1584,7 +1638,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v10');
+  L.push('版: v11');
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
   L.push('― できごと ―');
