@@ -533,7 +533,8 @@ async function playAt(qi) {
     src = so.url;
   } catch (e) {
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
-    toast('曲の場所が分かりません: ' + (e.message || e), 4000);
+    const two = V.link === false;
+    toast(two ? '直リンクも読み出しも断られました（' + (e.code || '') + '）' : '曲の場所が分かりません: ' + (e.message || e), 5000);
     return;
   }
   try {
@@ -642,7 +643,7 @@ $('#pti').onclick  = () => { const c = cur(); if (c) go('#/album/' + c.al.id); }
    叩いてみるまで分からない。読めない音を Web Audio に通すと
    ブラウザは「音を消す」ので、確かめる前に繋いではいけない。 */
 const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
-            ok:false, cors:LS.get('cors', null), link:LS.get('link', null),
+            ok:false, cors:null, link:null,   /* 判定は毎回やり直す。残すと直したことが効かなくなる */
             on:false, vi:0, raf:0 };
 const BANDS = 84;
 
@@ -653,7 +654,7 @@ async function probeCors(fileid) {
     const r = await fetch(u, { headers: { Range: 'bytes=0-1' } });
     V.cors = r.ok || r.status === 206;
   } catch (e) { V.cors = false; }
-  LS.set('cors', V.cors);
+
   note('直に流した音を読めるか: ' + (V.cors ? 'はい' : 'いいえ'));
   return V.cors;
 }
@@ -1023,10 +1024,8 @@ async function trackSource(t) {
       V.link = true;
       return { url: u, local: false };
     } catch (e) {
-      if (/referer/i.test(e.message || '') || e.code === 7010) {
-        V.link = false; LS.set('link', false);
-        note('直リンクは使えない（' + (e.message || '') + '）。api 経由に切り替える');
-      } else throw e;
+      V.link = false;
+      note('直リンク不可（' + (e.code != null ? e.code + ' ' : '') + (e.message || '') + '）→ api 経由へ');
     }
   }
   toast('読み込んでいます…', 1500);
@@ -1694,8 +1693,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v12');
-  L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない（api 経由）'));
+  L.push('版: v13');
+  L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
   L.push('― できごと ―');
@@ -1708,5 +1707,6 @@ note('画面を開いた（' + (location.hash || 'ハッシュなし') + '）');
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 }
+LS.del('link'); LS.del('cors');   /* 前の版が残した判定は捨てる */
 renderRoute();
 paintPlayer();
