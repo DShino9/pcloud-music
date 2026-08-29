@@ -107,31 +107,51 @@ async function login(email, password, say = () => {}) {
   if (!(window.crypto && crypto.subtle)) {
     throw new PCloudError(-5, 'この開き方では暗号が使えません。https:// で開いてください');
   }
-  let lastErr = null;
+  /* pCloud は合鍵（auth）の渡し方が一通りではない。
+     実機で「認証は通って userinfo が丸ごと返るのに auth だけ無い」状態を踏んだので、
+     符丁での取り方を先に試し、駄目なら pCloud が公式に認めている渡し方に降りる。
+     いずれも宛先は pcloud.com だけ。パスワードは端末にも控えにも残さない。 */
+  let lastErr = null, gotInfo = false;
   for (const host of ['api.pcloud.com', 'eapi.pcloud.com']) {
+    let dg;
     try {
       say(host + ' に問い合わせています…');
-      const dg = await api('getdigest', {}, host);
-      const pd = await sha1hex(password + (await sha1hex(email.toLowerCase())) + dg.digest);
-      /* logout=1 は付けない。合鍵をその場で無効にしうる余計な指示で、要らない。 */
-      const r = await api('userinfo',
-        { getauth: 1, username: email, digest: dg.digest, passworddigest: pd }, host);
-      /* 返事が result 0 でも合鍵が入っていないことがある。
-         ここで黙って先に進むと、画面の振り分けが「未ログイン」と判断して
-         ログイン画面を組み直し、入力も文字も消えて無言になる（実際に起きた）。 */
-      if (!r.auth) {
-        /* result 0 なのに合鍵が無い。何が返ってきたのかを名前だけ控える（値は残さない）。 */
-        const keys = Object.keys(r).join(', ');
-        note('合鍵なし。返ってきた項目: ' + keys);
-        throw new PCloudError(-6, 'pCloud が合鍵を返しませんでした。返ってきた項目: ' + keys);
+      dg = await api('getdigest', {}, host);
+    } catch (e) { lastErr = e; note('符丁がもらえない @ ' + host + ' code=' + e.code); continue; }
+    const pd = await sha1hex(password + (await sha1hex(email.toLowerCase())) + dg.digest);
+    const tries = [
+      ['userinfo', { getauth: 1, username: email, digest: dg.digest, passworddigest: pd }, '符丁'],
+      ['login',    { getauth: 1, username: email, digest: dg.digest, passworddigest: pd }, '符丁 / login'],
+      ['userinfo', { getauth: 1, username: email, password: password },                    '暗号化した通信で直接'],
+      ['login',    { getauth: 1, username: email, password: password },                    '暗号化した通信で直接 / login'],
+    ];
+    let badCreds = false;
+    for (const [m, params, label] of tries) {
+      try {
+        say(label + ' で合鍵をもらっています…');
+        const r = await api(m, params, host);
+        if (r.auth) {
+          S.host = host; S.auth = r.auth; S.email = r.email || email;
+          LS.set('host', host); LS.set('auth', r.auth); LS.set('email', S.email);
+          note('合鍵が取れた: ' + label + ' @ ' + host);
+          return r;
+        }
+        gotInfo = true;
+        note('合鍵なし: ' + label + ' @ ' + host + '（項目' + Object.keys(r).length + '個）');
+        lastErr = new PCloudError(-6, 'pCloud が合鍵を返しませんでした');
+      } catch (e) {
+        lastErr = e;
+        note('駄目: ' + label + ' @ ' + host + ' code=' + e.code);
+        if (e.code === 2000 || e.code === 1000) { badCreds = true; break; }   /* 地域違いか資格情報違い */
       }
-      S.host = host; S.auth = r.auth; S.email = r.email || email;
-      LS.set('host', host); LS.set('auth', r.auth); LS.set('email', S.email);
-      return r;
-    } catch (e) { lastErr = e; if (e.code !== 2000 && e.code !== 1000) throw e; }
+    }
+    if (!badCreds && gotInfo) break;   /* 認証は通っている。別の地域を試しても同じ */
   }
-  throw lastErr;
+  if (gotInfo) throw new PCloudError(-6,
+    'pCloud に入れましたが、合鍵をもらえませんでした（試した渡し方すべて）');
+  throw lastErr || new PCloudError(-7, 'つながりません');
 }
+
 function logout() {
   ['auth', 'email', 'rootId', 'rootName', 'covers', 'offline'].forEach(LS.del);
   Object.assign(S, { auth: '', email: '', rootId: null, rootName: '', albums: [], covers: {}, offline: {} });
@@ -545,8 +565,9 @@ function screenLogin() {
       <div class="msg${lastMsg && lastMsg.cls ? ' ' + lastMsg.cls : ''}" id="m">${lastMsg ? esc(lastMsg.text) : ''}</div>
       <button class="hbtn" id="diag" style="margin-top:14px;width:100%;padding:9px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);font-size:12.5px;color:var(--dim)">つながりを調べる</button>
       <pre id="diagout" class="hide" style="white-space:pre-wrap;font-size:11.5px;color:var(--dim);background:#0c0c10;border:1px solid var(--line);border-radius:9px;padding:11px;margin-top:10px;line-height:1.7"></pre>
-      <div class="note">パスワードはこの端末の中でだけ使われ、保存されません。
-      pCloud へ送られるのは、パスワードそのものではなく毎回変わる符丁です。
+      <div class="note">パスワードはこの端末に保存されません。まず「毎回変わる符丁」で試し、
+      それで合鍵をもらえないときだけ、pCloud が公式に認めている渡し方
+      （暗号化した通信でそのまま送る）に降ります。宛先は pcloud.com だけです。
       以後この端末には接続用の合鍵だけが残ります。</div>
     </div>`;
   const say = (t, cls) => {
@@ -845,7 +866,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v6');
+  L.push('版: v7');
   L.push('');
   L.push('― できごと ―');
   L.push(readLog());
