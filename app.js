@@ -61,11 +61,27 @@ const saveOffline = () => LS.set('offline', S.offline);
 class PCloudError extends Error {
   constructor(code, msg) { super(msg || ('pCloud error ' + code)); this.code = code; }
 }
-async function api(method, params = {}, host) {
+async function api(method, params = {}, host, ms = 25000) {
   const u = new URL('https://' + (host || S.host) + '/' + method);
   if (S.auth && !('username' in params)) u.searchParams.set('auth', S.auth);
   for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, v);
-  const r = await fetch(u, { cache: 'no-store' });
+  /* 返事が来ないまま黙って待ち続けると、画面が固まったようにしか見えない。必ず時間を切る。
+     abort が握り潰される環境があるので（実測）、中断要求とは別に時計と競争させて決着をつける。 */
+  const ac = new AbortController();
+  let timer;
+  const clock = new Promise((_, rej) => {
+    timer = setTimeout(() => {
+      try { ac.abort(); } catch (e) {}
+      rej(new PCloudError(-3, 'pCloud からの返事がありません（' + Math.round(ms / 1000) + '秒待ちました）'));
+    }, ms);
+  });
+  let r;
+  try { r = await Promise.race([fetch(u, { cache: 'no-store', signal: ac.signal }), clock]); }
+  catch (e) {
+    if (e instanceof PCloudError) throw e;
+    throw new PCloudError(-4, 'pCloud につながりません（通信が遮られている可能性）');
+  }
+  finally { clearTimeout(timer); }
   if (!r.ok) throw new PCloudError(-1, 'HTTP ' + r.status);
   const j = await r.json();
   if (j.result !== 0) throw new PCloudError(j.result, j.error);
@@ -77,6 +93,9 @@ const thumbUrl = (fileid, px) =>
   '&crop=1&type=auto&auth=' + encodeURIComponent(S.auth);
 
 async function login(email, password) {
+  if (!(window.crypto && crypto.subtle)) {
+    throw new PCloudError(-5, 'この開き方では暗号が使えません。https:// で開いてください');
+  }
   let lastErr = null;
   for (const host of ['api.pcloud.com', 'eapi.pcloud.com']) {
     try {
@@ -470,8 +489,24 @@ async function loadIndexFromCloud() {
 }
 
 /* ============ 画面 ============ */
-function go(hash) { location.hash = hash; }
+/* ハッシュが同じだと hashchange が飛ばない。
+   #/pick/0 が付いたまま開き直してログインすると、成功しても画面が変わらず
+   「つないでいます…」のまま固まる（実際に踏んだ）。同じときは自分で描き直す。 */
+function go(hash) {
+  if (location.hash === hash) renderRoute();
+  else location.hash = hash;
+}
 window.addEventListener('hashchange', renderRoute);
+
+/* pCloud が返す番号を、こちらの言葉に置き換える。分からない番号はそのまま見せる。 */
+function loginHint(e) {
+  if (e.code === 2000) return 'メールアドレスかパスワードが違います';
+  if (e.code === 1000) return 'ログインが通りませんでした';
+  if (e.code === 2012 || e.code === 2064) return '確認番号が違うか、期限が切れています';
+  if (e.code >= 2200 && e.code <= 2400) return '追加の確認が要るようです（下の返事をそのまま教えてください）';
+  if (e.code === 4000) return 'しばらく待ってからやり直してください（試行が多すぎます）';
+  return e.message || 'つながりません';
+}
 
 function screenLogin() {
   $('#hdr').classList.add('hide');
@@ -499,7 +534,8 @@ function screenLogin() {
       go(S.rootId ? '#/lib' : '#/pick/0');
     } catch (e) {
       $('#m').className = 'msg err';
-      $('#m').textContent = e.code === 2000 ? 'メールアドレスかパスワードが違います' : (e.message || 'つながりません');
+      $('#m').innerHTML = esc(loginHint(e)) +
+        (e.code > 0 ? `<br><span style="color:var(--dim);font-size:11.5px">pCloud の返事: ${e.code} — ${esc(e.message)}</span>` : '');
       $('#go').disabled = false;
     }
   };
