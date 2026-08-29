@@ -108,7 +108,7 @@ async function api(method, params = {}, host, ms = 25000) {
     }, ms);
   });
   let r;
-  try { r = await Promise.race([fetch(u, { cache: 'no-store', signal: ac.signal }), clock]); }
+  try { r = await Promise.race([fetch(u, { cache: 'no-store', signal: ac.signal, referrerPolicy: 'no-referrer' }), clock]); }
   catch (e) {
     if (e instanceof PCloudError) throw e;
     throw new PCloudError(-4, 'pCloud につながりません（通信が遮られている可能性）');
@@ -526,11 +526,11 @@ async function playAt(qi) {
   if (!t) return;
   let src = null;
   try {
-    const hit = await cachedResponse(t.id);
+    const so = await trackSource(t);
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
-    au.crossOrigin = (V.ok && !hit) ? 'anonymous' : null;
-    src = hit ? URL.createObjectURL(await hit.blob()) : await fileLink(t.id);
+    au.crossOrigin = (V.ok && !so.local) ? 'anonymous' : null;
+    src = so.url;
   } catch (e) {
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
     toast('曲の場所が分かりません: ' + (e.message || e), 4000);
@@ -642,7 +642,8 @@ $('#pti').onclick  = () => { const c = cur(); if (c) go('#/album/' + c.al.id); }
    叩いてみるまで分からない。読めない音を Web Audio に通すと
    ブラウザは「音を消す」ので、確かめる前に繋いではいけない。 */
 const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
-            ok:false, cors:LS.get('cors', null), on:false, vi:0, raf:0 };
+            ok:false, cors:LS.get('cors', null), link:LS.get('link', null),
+            on:false, vi:0, raf:0 };
 const BANDS = 84;
 
 async function probeCors(fileid) {
@@ -908,8 +909,11 @@ function screenNow() {
   /* 解析はここで初めて繋ぐ。読めない音を通すと無音になるので、確かめてから。 */
   (async () => {
     const cc = cur(); if (!cc) return;
-    const cached = await cachedResponse(cc.al.tracks[cc.i].id);
-    const ok = cached ? true : await probeCors(cc.al.tracks[cc.i].id);
+    const tid = cc.al.tracks[cc.i].id;
+    /* api 経由で読んだ音は手元にあるので、解析はいつでも通る。 */
+    const local = !!(await cachedResponse(tid)) || blobs.has(tid) || V.link === false;
+    const cached = local;
+    const ok = local ? true : await probeCors(tid);
     if (!ok) {
       $('#nmsg').className = 'msg';
       $('#nmsg').innerHTML = '直に流している音は解析できません。<b>アルバムを「端末に入れる」と、全部の絵が動きます。</b>';
@@ -961,26 +965,78 @@ function screenVis() {
 
 /* ============ オフライン保存 ============ */
 /* 直リンクが CORS を返さない場合に備え、api 経由の読み出しに落ちる道を用意する。 */
-async function fetchTrackBytes(fileid) {
+const MIME = { mp3:'audio/mpeg', m4a:'audio/mp4', m4b:'audio/mp4', aac:'audio/aac',
+               flac:'audio/flac', wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg',
+               aiff:'audio/aiff', aif:'audio/aiff', wma:'audio/x-ms-wma' };
+const mimeOf = name => MIME[ext(name)] || 'audio/mpeg';
+
+/* pCloud の getfilelink はウェブアプリからは使えない（参照元が pcloud.com に限定されている）。
+   その場合は api 経由で中身を丸ごと読む。こちらは制限を受けず、
+   手元に落ちるぶん解析器にも通せる（＝ビジュアライザーが確実に動く）。 */
+async function fetchTrackBytes(fileid, name, onProgress) {
   try {
-    const r = await fetch(await fileLink(fileid));
+    const r = await fetch(await fileLink(fileid), { referrerPolicy: 'no-referrer' });
     if (r.ok) return r;
-  } catch (e) { /* CORS で読めない → API 経由へ */ }
+  } catch (e) { /* 直リンクが駄目なら下へ */ }
   const fd = (await api('file_open', { fileid, flags: 0 })).fd;
   try {
-    const chunks = [];
+    const CH = 4 * 1024 * 1024, chunks = [];
+    let got = 0;
     for (;;) {
       const u = new URL('https://' + S.host + '/file_read');
       u.searchParams.set('auth', S.auth); u.searchParams.set('fd', fd);
-      u.searchParams.set('count', 4 * 1024 * 1024);
-      const rr = await fetch(u);
+      u.searchParams.set('count', CH);
+      const rr = await fetch(u, { referrerPolicy: 'no-referrer' });
+      /* 中身ではなく JSON のエラーが返ることがある。気づかず繋ぐと壊れた音になる。 */
+      if ((rr.headers.get('content-type') || '').includes('json')) {
+        const j = await rr.json();
+        throw new PCloudError(j.result, j.error || '読み出しを断られました');
+      }
       const buf = await rr.arrayBuffer();
       if (!buf.byteLength) break;
-      chunks.push(buf);
-      if (buf.byteLength < 4 * 1024 * 1024) break;
+      chunks.push(buf); got += buf.byteLength;
+      if (onProgress) onProgress(got);
+      if (buf.byteLength < CH) break;
     }
-    return new Response(new Blob(chunks, { type: 'audio/mpeg' }));
+    return new Response(new Blob(chunks, { type: mimeOf(name || '') }));
   } finally { try { await api('file_close', { fd }); } catch (e) {} }
+}
+
+/* 直近の数曲だけ手元に置く。棚が1535枚あるので、際限なく溜めない。 */
+const blobs = new Map();
+function keepBlob(id, url) {
+  blobs.set(id, url);
+  while (blobs.size > 3) {
+    const k = blobs.keys().next().value;
+    try { URL.revokeObjectURL(blobs.get(k)); } catch (e) {}
+    blobs.delete(k);
+  }
+}
+/* 曲の出どころを決める。手元 → 直リンク → api 経由の順。 */
+async function trackSource(t) {
+  const hit = await cachedResponse(t.id);
+  if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
+  if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
+  if (V.link !== false) {
+    try {
+      const u = await fileLink(t.id);
+      V.link = true;
+      return { url: u, local: false };
+    } catch (e) {
+      if (/referer/i.test(e.message || '') || e.code === 7010) {
+        V.link = false; LS.set('link', false);
+        note('直リンクは使えない（' + (e.message || '') + '）。api 経由に切り替える');
+      } else throw e;
+    }
+  }
+  toast('読み込んでいます…', 1500);
+  const res = await fetchTrackBytes(t.id, t.name, got => {
+    const mb = (got / 1048576).toFixed(1);
+    const el = $('#pti'); if (el) el.textContent = '読み込み中 ' + mb + 'MB';
+  });
+  const url = URL.createObjectURL(await res.blob());
+  keepBlob(t.id, url);
+  return { url, local: true };
 }
 async function downloadAlbum(album, btn) {
   if (!('caches' in window)) { toast('この環境では保存できません'); return; }
@@ -991,7 +1047,7 @@ async function downloadAlbum(album, btn) {
     if (await c.match(cacheKey(t.id))) { n++; continue; }
     if (btn) btn.textContent = `保存中 ${n + 1}/${album.tracks.length}`;
     try {
-      const res = await fetchTrackBytes(t.id);
+      const res = await fetchTrackBytes(t.id, t.name);
       await c.put(cacheKey(t.id), new Response(await res.blob()));
       S.offline[t.id] = 1; n++;
     } catch (e) { toast('保存できない曲がありました: ' + trackTitle(t)); }
@@ -1638,7 +1694,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v11');
+  L.push('版: v12');
+  L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない（api 経由）'));
   L.push('直に流した音を読めるか: ' + (V.cors === null ? '未確認' : V.cors ? 'はい' : 'いいえ'));
   L.push('');
   L.push('― できごと ―');
