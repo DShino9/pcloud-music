@@ -929,6 +929,24 @@ function foldGraph() {
   showTapState();
 }
 
+/* 画面を消したら解析器を畳む。
+   解析器に繋いだ要素は、その管を通ってしか鳴らない。iPhone は画面を消すと
+   その管を止めるので、**ロックした瞬間に音が消える**（実際にそうなった）。
+   波形を諦めて音を採る。畳むのは片道で、次に開き直すまで波形は出ない
+   （同じ要素を二度繋ぎ直せない決まりのため）。
+
+   前の住所では中継所が別の置き場だったので、そもそも繋げず、この症状は出なかった。
+   入口の下に移して同じ置き場になり、繋がるようになって表に出た。
+
+   机の上（マウスのある器）では畳まない。タブを裏に回しただけで波形が消えるのは
+   煩わしいし、そちらでは音も止まらない。 */
+const handheld = () => matchMedia('(pointer: coarse)').matches;
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') return;
+  if (!handheld() || au.paused) return;
+  if (tapped()) { note('画面が消えたので解析器を畳む（音を続けるため）'); foldGraph(); }
+});
+
 /* 鳴っているのに音が出ていないことがある。気づいて取り直す。 */
 let silT = null;
 function guardSilence(t) {
