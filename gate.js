@@ -228,6 +228,12 @@ export default {
       out.set('cache-control', 'private, max-age=600');
       return new Response(up.body, { status: up.status, headers: out });
     }
+    /* pCloud は「リンクを発行した相手」にしか中身を渡さない（実機で 410 を確認）。
+       入口が発行しても端末では使えないので、端末自身に発行させるほかない。
+       符号は札を持つ端末にだけ渡す。端末側は記憶に置くだけで保存しない。 */
+    if (url.pathname === '/api/code') {
+      return j({ code: env.PCLOUD_CODE || '', linkpw: env.PCLOUD_LINKPW || '', host });
+    }
     if (url.pathname === '/api/whoami') return j({ ok: true, gate: true });
 
     /* ---------- ページを配る（中身は GitHub Pages から） ---------- */

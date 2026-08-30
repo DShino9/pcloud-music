@@ -136,10 +136,20 @@ async function api(method, params = {}, host, ms = 25000) {
 }
 /* 共有リンクの符号で呼ぶ。合鍵と違って Origin で弾かれない。
    耳読が Mac 無しで鳴るのはこの道を通っているから。 */
+let memCode = null;      /* 入口からもらった符号。保存しない。閉じれば消える。 */
+async function getCode() {
+  if (memCode) return memCode;
+  const g = await gate('/api/code');
+  memCode = { code: g.code, linkpw: g.linkpw || '' };
+  if (g.host) S.host = g.host;
+  note('入口から符号を受け取った（保存しない）');
+  return memCode;
+}
 async function apiPub(method, params = {}, ms = 25000) {
+  const cd = GATE ? await getCode() : { code: S.code, linkpw: S.linkpw };
   const u = new URL('https://' + S.host + '/' + method);
-  u.searchParams.set('code', S.code);
-  if (S.linkpw) u.searchParams.set('linkpassword', S.linkpw);
+  u.searchParams.set('code', cd.code);
+  if (cd.linkpw) u.searchParams.set('linkpassword', cd.linkpw);
   for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, v);
   const ac = new AbortController();
   let timer;
@@ -239,9 +249,8 @@ function walk(node, trail, out) {
 }
 async function scanLibrary(folderid) {
   /* 符号があれば、共有リンクの中身が丸ごと降ってくる。folderid も合鍵も要らない。 */
-  const r = GATE ? await gate('/api/shelf')
-       : S.code ? await apiPub('showpublink', { recursive: 1 })
-                : await api('listfolder', { folderid, recursive: 1 });
+  const r = (GATE || S.code) ? await apiPub('showpublink', { recursive: 1 })
+                             : await api('listfolder', { folderid, recursive: 1 });
   const out = [];
   walk(r.metadata, [], out);
   out.sort((a, b) => collator.compare(a.artist + a.name, b.artist + b.name));
@@ -595,13 +604,8 @@ async function fileLink(fileid) {
   if (hit && hit.exp > Date.now()) return hit.url;
   /* 合鍵で出す getfilelink は Origin で弾かれる（7010）。
      符号で出す getpublinkdownload は弾かれない。耳読と同じ道。 */
-  if (GATE) {
-    const g = await gate('/api/link?fileid=' + encodeURIComponent(fileid));
-    P.linkCache.set(fileid, { url: g.url, exp: Date.now() + 20 * 60 * 1000 });
-    return g.url;
-  }
-  const r = S.code ? await apiPub('getpublinkdownload', { fileid, forcedownload: 0 })
-                   : await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
+  const r = (GATE || S.code) ? await apiPub('getpublinkdownload', { fileid, forcedownload: 0 })
+                             : await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
   const url = 'https://' + r.hosts[0] + r.path;
   P.linkCache.set(fileid, { url, exp: Date.now() + 40 * 60 * 1000 });
   return url;
@@ -665,18 +669,8 @@ async function playAt(qi) {
       /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
          通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
       const cands = [];
-      if (GATE) {
-        if (V.direct !== false) {
-          try {
-            const g = await gate('/api/link?fileid=' + encodeURIComponent(t.id));
-            if (g.url) cands.push(['直', g.url]);
-          } catch (e) { note('入口がリンクを出せない: ' + (e.message || e)); }
-        }
-        cands.push(['入口ごし', '/api/audio?fileid=' + encodeURIComponent(t.id)]);
-      } else {
-        if (V.direct !== false) { const d = await relayLink(t); if (d) cands.push(['直', d]); }
-        cands.push(['中継', relayUrl('/audio', t)]);
-      }
+      if (V.direct !== false) { const d = await relayLink(t); if (d) cands.push(['直', d]); }
+      cands.push(['中継', relayUrl('/audio', t)]);
       for (const [how, u] of cands) {
         try {
           await tryLoad(u);
@@ -1167,7 +1161,7 @@ function screenNow() {
         <button class="hbtn" id="npick">⚙</button>
       </div>
       <div class="nowwrap">
-        <canvas id="vcv"></canvas>
+        <div class="nowcv"><canvas id="vcv"></canvas></div>
         <div class="nowq" id="nowq"></div>
       </div>
       <div class="nowname" id="vname"></div>
@@ -1394,10 +1388,8 @@ async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 入口ごしの道は2つ。実機で pCloud が入口からの取得を 410 で拒んだので、
-     まず「入口はリンクを出すだけ、端末が直に取りに行く」を試す。
-     駄目なら入口に流させる。どちらが通るかは pCloud 次第なので決め打ちしない。 */
-  if (GATE) return { url: null, relay: true, local: false, cors: false };
+  /* 端末自身が発行したリンクなら pCloud は渡す。入口ごしでも同じ道を通る。 */
+  if (GATE || S.code) return { url: await fileLink(t.id), local: false, cors: false };
   if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
   if (S.relay) return { url: null, relay: true, local: false, cors: true };
@@ -2774,7 +2766,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v41');
+  L.push('版: v42');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));

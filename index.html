@@ -163,8 +163,9 @@ body[data-cell="s"] .cov .go{width:28px;height:28px;font-size:11px}
 .nowinfo .nt{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nowinfo .na{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nowwrap{flex:1;min-height:0;display:flex;gap:12px}
-.now canvas{flex:1;min-width:0;min-height:0;display:block;border-radius:12px;background:#0b0b0f;
-  cursor:pointer;touch-action:manipulation}
+.nowcv{flex:1;min-width:0;min-height:0;position:relative}
+.now canvas{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:12px;
+  background:#0b0b0f;cursor:pointer;touch-action:manipulation}
 .nowq{width:270px;flex:none;overflow-y:auto;-webkit-overflow-scrolling:touch;
   border-left:1px solid var(--line);padding-left:12px}
 .nowq .qh{font-size:11.5px;color:var(--dim);margin:2px 0 8px;position:sticky;top:0;
@@ -313,6 +314,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=41"></script>
+<script src="./app.js?v=42"></script>
 </body>
 </html>
