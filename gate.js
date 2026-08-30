@@ -234,6 +234,37 @@ export default {
     if (url.pathname === '/api/code') {
       return j({ code: env.PCLOUD_CODE || '', linkpw: env.PCLOUD_LINKPW || '', host });
     }
+    /* 端末が発行したリンクを、入口が取りに行って素通しする。
+       同じ置き場から配られるので、ブラウザは中身を読める＝波形が出る。
+       許可も要らない。pCloud のあて先だけを通す。 */
+    if (url.pathname === '/api/pipe') {
+      const u = url.searchParams.get('u');
+      if (!u) return j({ error: 'u が要ります' }, 400);
+      let tgt;
+      try { tgt = new URL(u); } catch (e) { return j({ error: 'あて先が読めません' }, 400); }
+      if (tgt.protocol !== 'https:' || !/(^|\.)pcloud\.com$/.test(tgt.hostname)) {
+        return j({ error: 'あて先が不正です' }, 400);
+      }
+      const h2 = new Headers();
+      const rg = req.headers.get('Range');
+      if (rg) h2.set('Range', rg);
+      h2.set('user-agent', 'Mozilla/5.0 (compatible; ongakudana/1.0)');
+      let up2;
+      try { up2 = await fetch(tgt.toString(), { headers: h2, redirect: 'follow' }); }
+      catch (e) { return j({ error: 'つながりません' }, 502); }
+      if (!up2.ok && up2.status !== 206) {
+        return j({ error: 'pCloud が中身を渡しません', status: up2.status }, 502);
+      }
+      const out2 = new Headers();
+      for (const k of ['content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        const v = up2.headers.get(k); if (v) out2.set(k, v);
+      }
+      out2.set('accept-ranges', out2.get('accept-ranges') || 'bytes');
+      out2.set('content-type', audioType(tgt.pathname));
+      out2.set('access-control-allow-origin', '*');
+      out2.set('cache-control', 'private, max-age=600');
+      return new Response(up2.body, { status: up2.status, headers: out2 });
+    }
     if (url.pathname === '/api/whoami') return j({ ok: true, gate: true });
 
     /* ---------- ページを配る（中身は GitHub Pages から） ---------- */

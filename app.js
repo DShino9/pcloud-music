@@ -702,7 +702,7 @@ async function playAt(qi) {
   const { al, i } = P.q[qi];
   const t = al.tracks[i];
   if (!t) return;
-  let src = null;
+  let src = null, soPipe = false;
   try {
     const so = await trackSource(t);
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
@@ -726,6 +726,7 @@ async function playAt(qi) {
       if (!src) throw new PCloudError(-9, 'どちらの道でも音を読めません');
     } else {
       src = so.url;
+      soPipe = !!so.pipe;
     }
   } catch (e) {
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
@@ -737,8 +738,15 @@ async function playAt(qi) {
     if (au.src !== src) au.src = src;
     await au.play();
     pending = null;
+    if (soPipe) { V.pipe = true; note('入口ごしで配れた（波形が出せる）'); }
   } catch (e) {
     note('鳴らせない: ' + e.name + ' ' + (e.message || ''));
+    if (soPipe && V.pipe !== false) {
+      /* 入口ごしが駄目だった。以後は端末が直に取りに行く。 */
+      V.pipe = false;
+      note('入口ごしは駄目。直に切り替える');
+      return playAt(qi);
+    }
     if (e.name === 'NotAllowedError') {
       pending = qi;
       toast('もう一度押してください（音を出す許可が要ります）', 4000);
@@ -881,7 +889,7 @@ $('#pdots').onclick = () => nowSheet();
    叩いてみるまで分からない。読めない音を Web Audio に通すと
    ブラウザは「音を消す」ので、確かめる前に繋いではいけない。 */
 const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
-            ok:false, cors:null, link:null, direct:null, directUrl:null,
+            ok:false, cors:null, link:null, direct:null, directUrl:null, pipe:null,
             on:false, vi:0, raf:0 };
 const BANDS = 84;
 
@@ -1952,8 +1960,15 @@ async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 端末自身が発行したリンクなら pCloud は渡す。入口ごしでも同じ道を通る。 */
-  if (GATE || S.code) return { url: await fileLink(t.id), local: false, cors: false };
+  /* 端末自身が発行したリンクなら pCloud は渡す。
+     入口があるときは、そのリンクを入口に取りに行かせて素通ししてもらう。
+     同じ置き場から配られるので中身が読め、許可なしで波形が出る。
+     入口が断られたら、端末が直に取りに行く（音は鳴るが波形は出ない）。 */
+  const link = await fileLink(t.id);
+  if (GATE && V.pipe !== false) {
+    return { url: '/api/pipe?u=' + encodeURIComponent(link), local: true, cors: true, pipe: link };
+  }
+  if (GATE || S.code) return { url: link, local: false, cors: false };
   if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
   if (S.relay) return { url: null, relay: true, local: false, cors: true };
@@ -3648,7 +3663,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v62');
+  L.push('版: v63');
+  L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
