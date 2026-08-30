@@ -876,7 +876,7 @@ function coverImage(al) {
 }
 
 const VIS = {
-  art:   ['ジャケット',     false],
+  art:   ['ジャケットと盤',  false],
   disc:  ['回転ジャケット', false],
   ladder:['L／R レベル',    true],
   bars:  ['スペクトラム',    true],
@@ -890,38 +890,91 @@ S.vis = LS.get('vis', ['art', 'disc', 'ladder', 'bars', 'ring']);
 if (!S.vis.includes('art')) { S.vis = ['art'].concat(S.vis); LS.set('vis', S.vis); }
 
 const VD = {
-  /* ジャケットを主役にしたまま、下端で音を見せる。解析が無くても絵として成立する。 */
+  /* ジャケットを背景に、CDが回り、左下に L/R のレベル計。
+     お手持ちの大航海時代の盤の見え方に寄せてある。
+     解析が無くても盤は回るので、どんな流し方でも絵として成立する。 */
   art(x, w, h, al) {
-    const im = coverImage(al);
-    const side = Math.min(w, h) * 0.86;
+    const im = coverImage(al), ok = im && im.complete && im.naturalWidth;
+    const side = Math.min(w, h) * 0.94;
     const ox = (w - side) / 2, oy = (h - side) / 2;
+
+    /* ① 背景のジャケット */
     x.save();
-    const r = 14;
+    const r = Math.max(6, side * 0.02);
     x.beginPath();
     x.moveTo(ox + r, oy); x.arcTo(ox + side, oy, ox + side, oy + side, r);
     x.arcTo(ox + side, oy + side, ox, oy + side, r); x.arcTo(ox, oy + side, ox, oy, r);
     x.arcTo(ox, oy, ox + side, oy, r); x.closePath(); x.clip();
-    if (im && im.complete && im.naturalWidth) x.drawImage(im, ox, oy, side, side);
-    else { x.fillStyle = '#1c1c24'; x.fillRect(ox, oy, side, side);
-           x.fillStyle = '#3a3a48'; x.font = '600 40px -apple-system,sans-serif';
-           x.textAlign = 'center'; x.fillText('♪', w / 2, h / 2 + 14); x.textAlign = 'left'; }
-    /* 下端をうっすら暗くして、棒が読めるようにする */
-    const g = x.createLinearGradient(0, oy + side * 0.62, 0, oy + side);
-    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.62)');
-    x.fillStyle = g; x.fillRect(ox, oy + side * 0.6, side, side * 0.4);
-    const n = 48, bw = side / n, base = oy + side - 10;
-    for (let i = 0; i < n; i++) {
-      const v = band[Math.floor(i * BANDS / n)];
-      const bh = 3 + v * side * 0.26;
-      x.fillStyle = `rgba(255,255,255,${0.30 + v * 0.62})`;
-      x.fillRect(ox + i * bw + 1, base - bh, Math.max(1, bw - 2), bh);
+    if (ok) x.drawImage(im, ox, oy, side, side);
+    else {
+      x.fillStyle = '#171720'; x.fillRect(ox, oy, side, side);
+      x.fillStyle = '#33333f'; x.font = '600 ' + Math.round(side * 0.16) + 'px -apple-system,sans-serif';
+      x.textAlign = 'center'; x.fillText('♪', w / 2, h / 2 + side * 0.06); x.textAlign = 'left';
     }
+
+    /* ② 盤。左寄りに重ねて回す */
+    const dr = side * 0.325;
+    const cx = ox + side * 0.285, cy = oy + side * 0.505;
+    x.save(); x.translate(cx, cy);
+    /* 影 */
+    x.beginPath(); x.arc(3, 5, dr, 0, 7);
+    x.fillStyle = 'rgba(0,0,0,.42)'; x.fill();
+    x.rotate(spin);
+    x.beginPath(); x.arc(0, 0, dr, 0, 7); x.save(); x.clip();
+    if (ok) {
+      /* 絵をそのまま貼ると題字が二重に見える。大きく引き伸ばして色だけ拾う。 */
+      const z = dr * 3.6;
+      x.drawImage(im, -z, -z, z * 2, z * 2);
+      x.fillStyle = 'rgba(150,195,240,.42)';          /* 盤の色味 */
+      x.fillRect(-dr, -dr, dr * 2, dr * 2);
+    } else { x.fillStyle = '#20303f'; x.fillRect(-dr, -dr, dr * 2, dr * 2); }
+    /* 虹色の照り返し */
+    const sh = x.createLinearGradient(-dr, -dr, dr, dr);
+    sh.addColorStop(0,   'rgba(255,255,255,.34)');
+    sh.addColorStop(.22, 'rgba(180,230,255,.10)');
+    sh.addColorStop(.42, 'rgba(255,255,255,0)');
+    sh.addColorStop(.60, 'rgba(255,200,235,.16)');
+    sh.addColorStop(.80, 'rgba(255,255,255,.24)');
+    sh.addColorStop(1,   'rgba(255,255,255,0)');
+    x.fillStyle = sh; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+    x.restore();
+    /* 溝 */
+    x.strokeStyle = 'rgba(255,255,255,.07)'; x.lineWidth = 1;
+    for (let i = 1; i <= 9; i++) { x.beginPath(); x.arc(0, 0, dr * (0.30 + i * 0.075), 0, 7); x.stroke(); }
+    /* 中心の透明な輪と穴 */
+    x.beginPath(); x.arc(0, 0, dr * 0.235, 0, 7);
+    x.fillStyle = 'rgba(232,240,248,.55)'; x.fill();
+    x.strokeStyle = 'rgba(255,255,255,.5)'; x.lineWidth = 1; x.stroke();
+    x.beginPath(); x.arc(0, 0, dr * 0.155, 0, 7);
+    x.fillStyle = 'rgba(210,225,240,.30)'; x.fill();
+    x.beginPath(); x.arc(0, 0, dr * 0.075, 0, 7);
+    x.fillStyle = '#0b0b0f'; x.fill();
+    x.restore();
+    x.beginPath(); x.arc(cx, cy, dr, 0, 7);
+    x.strokeStyle = 'rgba(255,255,255,.22)'; x.lineWidth = 1; x.stroke();
+
+    /* ③ 左下の L / R レベル計 */
+    const mx = ox + side * 0.055, my = oy + side * 0.845;
+    const n = 26, gap = side * 0.0145, bw = Math.max(1.5, side * 0.0075);
+    const rowH = side * 0.052;
+    x.font = '600 ' + Math.round(side * 0.042) + 'px "Hiragino Sans",-apple-system,serif';
+    [['L', lvL], ['R', lvR]].forEach((row, ri) => {
+      const y = my + ri * rowH;
+      x.fillStyle = 'rgba(255,255,255,.92)';
+      x.fillText(row[0], mx, y + side * 0.014);
+      for (let i = 0; i < n; i++) {
+        const v = band[Math.floor(i * BANDS / n)] * (0.45 + row[1] * 1.1);
+        const bh = Math.max(side * 0.004, v * side * 0.045);
+        x.fillStyle = `rgba(255,255,255,${0.34 + Math.min(0.62, v * 1.3)})`;
+        x.fillRect(mx + side * 0.055 + i * gap, y - bh / 2, bw, bh);
+      }
+    });
+
     x.restore();
     /* 拍で外周がふわりと光る */
-    x.beginPath();
-    x.rect(ox - 2, oy - 2, side + 4, side + 4);
-    x.strokeStyle = `rgba(110,168,254,${0.10 + beatE * 0.45})`;
-    x.lineWidth = 2 + beatE * 3; x.stroke(); x.lineWidth = 1;
+    x.beginPath(); x.rect(ox - 2, oy - 2, side + 4, side + 4);
+    x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.30})`;
+    x.lineWidth = 1.5 + beatE * 2.5; x.stroke(); x.lineWidth = 1;
   },
   disc(x, w, h, al) {
     const cx = w/2, cy = h/2, rad = Math.min(w,h)*0.36, im = coverImage(al);
@@ -2648,7 +2701,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v37');
+  L.push('版: v38');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
