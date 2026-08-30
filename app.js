@@ -328,6 +328,22 @@ const cleanName = s => String(s || '')
 
 /* フォルダ名は「アーティスト - アルバム」の形が多い。分けずに丸ごと照合すると、
    同じ言葉を含むトリビュート盤を掴む（実測で踏んだ）。 */
+const artOf = c => {
+  if (!c || !c.label) return '';
+  const i = c.label.indexOf(' / ');
+  return i < 0 ? '' : c.label.slice(0, i);
+};
+/* 表示に使うアーティスト名。親フォルダが「洋楽」のような棚の名前のときは、
+   それを人の名前として出さない。拾ったジャケットに付いてきた名前を使う。 */
+function artistOf(al) {
+  const raw = cleanName(al.artist);
+  if (raw && !GENRE_WORDS.has(raw.toLowerCase())) return raw;
+  const c = S.covers[al.id];
+  if (c && c.a) return c.a;
+  const m = parseAlbum(al);
+  return m.artist || '';
+}
+
 function parseAlbum(al) {
   const raw = cleanName(al.name);
   const par = cleanName(al.artist);
@@ -433,7 +449,7 @@ async function sweepByArtist(targets, groups) {
       if (S.sweep.stop) return;
       const best = rank(pool, al)[0];
       if (best && best.score >= SURE) {
-        S.covers[al.id] = { url: best.url, src: best.src, q: albumQuery(al),
+        S.covers[al.id] = { url: best.url, src: best.src, q: albumQuery(al), a: artOf(best),
                             manual: false, score: best.score, sure: true };
         if (best.g || best.y) S.meta[al.id] = { g: best.g || '', y: best.y || '' };
         al._done = true; S.sweep.hit++; S.sweep.done++;
@@ -469,7 +485,7 @@ async function sweepCovers(onlyMissing = true) {
         const top = cands[0];
         /* 候補一式は持たない。1500件も抱えると端末の記憶（5MB前後）を越え、
            保存が黙って失敗して結果が残らなくなる。選び直す時に取り直せばよい。 */
-        S.covers[al.id] = { url: top.url, src: top.src, q, manual: false,
+        S.covers[al.id] = { url: top.url, src: top.src, q, a: artOf(top), manual: false,
                             score: top.score, sure: top.score >= SURE };
         if (top.g || top.y) S.meta[al.id] = { g: top.g || '', y: top.y || '' };
         if (top.score >= SURE) S.sweep.hit++; else S.sweep.iffy++;
@@ -760,7 +776,7 @@ function paintPlayer() {
   p.classList.remove('gone'); document.body.classList.add('playing');
   const t = c.al.tracks[c.i];
   $('#pti').textContent = trackTitle(t);
-  $('#par').textContent = [c.al.artist, c.al.name].filter(Boolean).join(' — ');
+  $('#par').textContent = [artistOf(c.al), c.al.name].filter(Boolean).join(' — ');
   const nx = P.q[P.qi + 1];
   $('#pnx').textContent = nx ? '次: ' + trackTitle(nx.al.tracks[nx.i]) : '次はありません';
   $('#pqn').textContent = Math.max(0, P.q.length - P.qi - 1);
@@ -1166,7 +1182,7 @@ function drawMeter(x, u, ox, oy, S0, spot) {
   const live = V.ok || (S.deco && !au.paused);
   if (!live) return;
   const rowH = u(0.052);
-  const my = (spot === 'br') ? oy + u(0.14) : oy + u(0.845);
+  const my = (spot === 'br' || spot === 'bs') ? oy + u(0.14) : oy + u(0.845);
   const rows = [['L', lvL], ['R', lvR]];
 
   if (kind === 'vu') {
@@ -1341,7 +1357,7 @@ const VD = {
     x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
     x.strokeRect(px + u(0.008), py + u(0.008), pw - u(0.016), ph - u(0.016));
     x.lineWidth = 1;
-    const artist = cleanName(al.artist) || '—';
+    const artist = artistOf(al) || cleanName(al.name);
     let as = u(0.062);
     x.font = '800 italic ' + as + 'px "Hiragino Sans",-apple-system,sans-serif';
     while (x.measureText(artist).width > pw - u(0.06) && as > u(0.026)) {
@@ -1606,7 +1622,7 @@ function screenNow() {
         <button class="qi" data-nq="${P.qi + 1 + k}">
           ${coverOf(r.al) ? `<img loading="lazy" src="${esc(coverOf(r.al))}">` : '<img alt="">'}
           <span class="qt"><span class="q1">${esc(trackTitle(r.al.tracks[r.i]))}</span>
-            <span class="q2">${esc(r.al.name)}${r.al.artist ? ' · ' + esc(r.al.artist) : ''}</span></span>
+            <span class="q2">${esc(r.al.name)}${artistOf(r.al) ? ' · ' + esc(artistOf(r.al)) : ''}</span></span>
         </button>`).join('') || '<div class="qe">この曲でおしまいです</div>');
     q.querySelectorAll('[data-nq]').forEach(b => b.onclick = () => { playAt(+b.dataset.nq); });
   };
@@ -1617,7 +1633,7 @@ function screenNow() {
     el.textContent = trackTitle(cc.al.tracks[cc.i]);
     const ar = $('#nar'), vn = $('#vname'), pl = $('#nplay');
     if (ar) {
-      ar.textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
+      ar.textContent = [artistOf(cc.al), cc.al.name].filter(Boolean).join(' — ');
       ar.style.cursor = 'pointer';
       ar.onclick = () => go('#/album/' + cc.al.id);
     }
@@ -2030,7 +2046,7 @@ function screenCar() {
   const paint = () => {
     const cc = cur(), t = $('#cti'); if (!cc || !t) return;
     t.textContent = trackTitle(cc.al.tracks[cc.i]);
-    $('#car2').textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
+    $('#car2').textContent = [artistOf(cc.al), cc.al.name].filter(Boolean).join(' — ');
     const cv = coverOf(cc.al);
     $('#cimg').src = cv || '';
     $('#cimg').style.visibility = cv ? 'visible' : 'hidden';
@@ -2291,7 +2307,7 @@ function gridOf(list) {
         <button class="go" data-play="${al.id}" aria-label="再生">▶</button>
       </div>
       <div class="t">${esc(al.name)}</div>
-      <div class="a">${esc(al.artist)}${y ? ' · ' + esc(y) : ''} · ${al.tracks.length}曲</div>
+      <div class="a">${esc(artistOf(al))}${y ? ' · ' + esc(y) : ''} · ${al.tracks.length}曲</div>
     </div>`;
   }).join('')}</div>`;
 }
@@ -2499,7 +2515,7 @@ function moodQueue(seed, n = 60) {
 
 /* 掘る。1535枚を上から眺めるのは無理なので、まとまりから入る。 */
 function keyOf(kind, al) {
-  return kind === 'artist' ? cleanName(al.artist)
+  return kind === 'artist' ? artistOf(al)
        : kind === 'genre'  ? albumGenre(al)
                            : moodLabel(moodOf(al) || '');
 }
@@ -2583,7 +2599,7 @@ function screenAlbum(id) {
       <div class="cov">${cv ? `<img src="${esc(cv)}">` : `<span class="made" style="${madeCover(al)}">${esc(al.name)}</span>`}</div>
       <div class="meta">
         <h2>${esc(al.name)}</h2>
-        <div class="a">${esc(al.artist)}</div>
+        <div class="a">${esc(artistOf(al))}</div>
         <div class="a">${esc([g, y, al.tracks.length + ' 曲', pc ? '聴いた ' + pc + ' 回' : ''].filter(Boolean).join(' · '))}</div>
         <div class="acts">
           <button class="hbtn" id="pall">▶ 通して聴く</button>
@@ -3524,7 +3540,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v57');
+  L.push('版: v58');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
