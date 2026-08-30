@@ -696,6 +696,42 @@ addEventListener('pointerdown', () => {
 }, true);
 
 let pending = null;   // 資格が無くて鳴らせなかったもの
+/* 解析器に繋いだ要素は、外の置き場の音を流すと黙って無音になる。
+   そのときは中身をこちらへ取り込んで、自分の置き場から鳴らす。 */
+let blobUrl = null;
+async function bytesUrl(t) {
+  const r = await fetch('/api/audio?fileid=' + encodeURIComponent(t.id), { cache: 'no-store' });
+  if (!r.ok) throw new Error('入口が渡さない: ' + r.status);
+  const b = await r.blob();
+  if (b.size < 10000) throw new Error('中身が小さすぎる: ' + b.size);
+  if (blobUrl) URL.revokeObjectURL(blobUrl);
+  blobUrl = URL.createObjectURL(b);
+  return blobUrl;
+}
+const tapped = () => !!(V.ok && !V.tap);   /* 解析器に直結している */
+
+/* 鳴っているのに音が出ていないことがある。気づいて取り直す。 */
+let silT = null;
+function guardSilence(t) {
+  clearTimeout(silT);
+  if (!tapped() || !GATE) return;
+  const t0 = au.currentTime;
+  silT = setTimeout(async () => {
+    if (au.paused || au.muted || !au.volume) return;
+    if (au.currentTime <= t0 + 0.3) return;      /* 進んでいない＝別の理由 */
+    if (await hasSignal(1200)) return;           /* 出ている */
+    note('鳴っているのに音がない。取り直す');
+    const at = au.currentTime;
+    try {
+      au.src = await bytesUrl(t);
+      V.pipeWay = '取り込み'; V.sameOrigin = true;
+      au.currentTime = at;
+      await au.play();
+      showTapState();
+      toast('音の道を取り直しました', 2500);
+    } catch (e) { note('取り直しも駄目: ' + (e.message || e)); }
+  }, 2600);
+}
 async function playAt(qi) {
   if (qi < 0 || qi >= P.q.length) return;
   P.qi = qi;
@@ -715,31 +751,44 @@ async function playAt(qi) {
          ③ 端末が直に取る（鳴るが波形は出ない）
          ①②が通れば同じ置き場になるので、許可なしで波形が出る。 */
       const cands = [];
+      const gp = '/api/audio?fileid=' + encodeURIComponent(t.id);
       if (V.pipe !== 'direct') {
-        cands.push(['入口が配る', '/api/audio?fileid=' + encodeURIComponent(t.id), true]);
-        try {
-          const lk = await fileLink(t.id);
-          cands.push(['入口が中継', '/api/pipe?u=' + encodeURIComponent(lk), true]);
-          cands.push(['端末が直に', lk, false]);
+        cands.push(['入口が配る', gp, true]);
+        cands.push(['入口が配る・二度目', gp + '&r=2', true]);   /* 断りは気まぐれなので粘る */
+        if (V.pipeDead !== 'pipe') try {
+          cands.push(['入口が中継', '/api/pipe?u=' + encodeURIComponent(await fileLink(t.id)), true]);
         } catch (e) { note('リンクを出せない: ' + (e.message || e)); }
-      } else {
-        cands.push(['端末が直に', await fileLink(t.id), false]);
+      }
+      /* 解析器に繋がっている間、外の置き場から流すとブラウザが音を消す。
+         だから繋がっているときは外へ落とさない。 */
+      if (!tapped()) {
+        try { cands.push(['端末が直に', await fileLink(t.id), false]); }
+        catch (e) { note('リンクを出せない: ' + (e.message || e)); }
       }
       /* 前に通った道を先頭に */
       if (V.pipeWay) {
         const k = cands.findIndex(c => c[0] === V.pipeWay);
         if (k > 0) cands.unshift(cands.splice(k, 1)[0]);
       }
-      let okWay = null;
       for (const [how, u, sameOrigin] of cands) {
         try {
           await tryLoad(u);
-          src = u; okWay = how;
-          V.pipeWay = how; V.sameOrigin = sameOrigin;
+          src = u; V.pipeWay = how; V.sameOrigin = sameOrigin;
           if (!sameOrigin) V.pipe = 'direct';
           note('通った道: ' + how);
           break;
-        } catch (e2) { note('駄目な道: ' + how); }
+        } catch (e2) {
+          note('駄目な道: ' + how);
+          if (how === '入口が中継') V.pipeDead = 'pipe';
+        }
+      }
+      /* どれも駄目。中身をこちらへ取り込んで鳴らす（自分の置き場になるので必ず解析できる）。 */
+      if (!src) {
+        try {
+          src = await bytesUrl(t);
+          V.pipeWay = '取り込み'; V.sameOrigin = true;
+          note('取り込んで鳴らす');
+        } catch (e3) { note('取り込みも駄目: ' + (e3.message || e3)); }
       }
       if (!src) throw new PCloudError(-9, 'どの道でも音を読めません');
     } else if (so.relay) {
@@ -771,6 +820,7 @@ async function playAt(qi) {
     if (au.src !== src) au.src = src;
     await au.play();
     pending = null;
+    guardSilence(t);
     if (soPipe) { V.pipe = true; note('入口ごしで配れた（波形が出せる）'); }
   } catch (e) {
     note('鳴らせない: ' + e.name + ' ' + (e.message || ''));
@@ -3732,7 +3782,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v65');
+  L.push('版: v66');
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
