@@ -2864,9 +2864,17 @@ const moodOf = al => {
   /* 曲の札が集まっているなら、そこから決める。押さなくても埋まる。 */
   const t = albumTagMood(al);
   if (t) return t;
-  if (!m) return null;
-  return m.tag || autoMood(m);
+  if (m) return m.tag || autoMood(m);
+  /* MusicBrainz が当たらない盤は、同梱した BPM から決める */
+  const sm = shippedMood(al);
+  return sm ? sm.tag : null;
 };
+/* 同梱の索引にある、BPM から決めた雰囲気 */
+function shippedMood(al) {
+  if (!TMOOD) return null;
+  const e = TMOOD.byPath[pathKey(al)];
+  return (e && e.alb) ? e.alb : null;
+}
 /* アルバムの雰囲気を、収めた曲の札の多数決で決める。 */
 const atmCache = new Map();
 function albumTagMood(al) {
@@ -2943,12 +2951,12 @@ async function sweepMood() {
 
 /* 「この雰囲気で流す」。いま鳴っているものに近いものを次々つなぐ。 */
 function moodQueue(seed, n = 60) {
-  const m0 = S.mood[seed.id] || {};
+  const m0 = S.mood[seed.id] || shippedMood(seed) || {};
   const k0 = moodOf(seed);
   const g0 = albumGenre(seed);
   const b0 = m0.bpm || 0;
   const scored = S.albums.filter(al => al.id !== seed.id).map(al => {
-    const m = S.mood[al.id] || {};
+    const m = S.mood[al.id] || shippedMood(al) || {};
     let sc = 0;
     if (k0 && moodOf(al) === k0) sc += 3;
     if (g0 && albumGenre(al) === g0) sc += 2;
@@ -4134,7 +4142,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v82');
+  L.push('版: v83');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
