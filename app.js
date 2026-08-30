@@ -946,16 +946,7 @@ async function playAt(qi) {
     if (seq !== playSeq) return;                 /* もう別の曲に移っている */
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
     toast('曲の場所が分かりません: ' + linkHint(e), 6000);
-    if (e.code === 2003) linkState().then(st => {
-      note('リンクの様子: ' + JSON.stringify(st));
-      const w = linkStateWords(st);
-      if (st.downloadenabled === false) {
-        toast('共有リンクの取り出しが止められています。通信量を使い切った可能性が高いです。'
-            + '日をまたぐか、リンクを作り直してください', 9000);
-      } else if (w.length) {
-        toast('リンクは生きています（' + w.join('・') + '）。立て込みによる一時的な断りのようです', 8000);
-      }
-    }).catch(err => note('リンクの様子を見られない: ' + (err.message || err)));
+    if (e.code === 2003) diagnoseDenied(t).catch(err => note('切り分けできない: ' + (err.message || err)));
     if (S.relay) diagnoseRelay(t);
     return;
   }
@@ -2829,6 +2820,40 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('beforeunload', keepScroll);
 
 /* pCloud が返す番号を、こちらの言葉に置き換える。分からない番号はそのまま見せる。 */
+/* 断られたとき、リンク全体が駄目なのか、この曲だけなのかを一度で切り分ける。
+   決めつけずに、別の曲でも試して比べる。 */
+async function diagnoseDenied(t) {
+  const st = await linkState().catch(e => ({ err: (e.message || e) }));
+  note('リンクの様子: ' + JSON.stringify(st));
+  /* 棚の別の曲でも試す。通れば、駄目なのはこの曲だけ。 */
+  let other = null, otherOk = null, otherErr = '';
+  for (const al of S.albums) {
+    const t2 = al.tracks.find(x => String(x.id) !== String(t.id));
+    if (t2) { other = t2; break; }
+  }
+  if (other) {
+    try { await apiPub('getpublinkdownload', { fileid: other.id, forcedownload: 0 }); otherOk = true; }
+    catch (e2) { otherOk = false; otherErr = 'code=' + e2.code; }
+    note('別の曲でも試した: ' + (otherOk ? '通った' : '駄目 ' + otherErr));
+  }
+  if (st.downloadenabled === false) {
+    toast('共有リンクの取り出しが止められています。通信量を使い切ったときにこうなります。'
+        + '日をまたぐか、リンクを作り直してください', 10000);
+    return;
+  }
+  if (otherOk === true) {
+    toast('別の曲は通りました。駄目なのはこの曲だけです。'
+        + 'ファイルが動いたか消えた可能性があります（棚を読み直すと直ることがあります）', 9000);
+    return;
+  }
+  if (otherOk === false) {
+    toast('別の曲も同じく断られました。リンク側の問題です。'
+        + '⋯ →「つながりを調べる」の「共有リンクの様子」を見てください', 9000);
+    return;
+  }
+  toast('切り分けられませんでした。⋯ →「つながりを調べる」を見てください', 7000);
+}
+
 /* 共有リンクそのものの様子を見る。断られた理由はたいていここに出ている。
    pCloud は通信量を使い切ると downloadenabled を落とす。 */
 async function linkState() {
@@ -4581,7 +4606,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v117');
+  L.push('版: v118');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
