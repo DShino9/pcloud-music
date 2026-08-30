@@ -665,8 +665,18 @@ async function playAt(qi) {
       /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
          通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
       const cands = [];
-      if (V.direct !== false) { const d = await relayLink(t); if (d) cands.push(['直', d]); }
-      cands.push(['中継', relayUrl('/audio', t)]);
+      if (GATE) {
+        if (V.direct !== false) {
+          try {
+            const g = await gate('/api/link?fileid=' + encodeURIComponent(t.id));
+            if (g.url) cands.push(['直', g.url]);
+          } catch (e) { note('入口がリンクを出せない: ' + (e.message || e)); }
+        }
+        cands.push(['入口ごし', '/api/audio?fileid=' + encodeURIComponent(t.id)]);
+      } else {
+        if (V.direct !== false) { const d = await relayLink(t); if (d) cands.push(['直', d]); }
+        cands.push(['中継', relayUrl('/audio', t)]);
+      }
       for (const [how, u] of cands) {
         try {
           await tryLoad(u);
@@ -890,91 +900,150 @@ S.vis = LS.get('vis', ['art', 'disc', 'ladder', 'bars', 'ring']);
 if (!S.vis.includes('art')) { S.vis = ['art'].concat(S.vis); LS.set('vis', S.vis); }
 
 const VD = {
-  /* ジャケットを背景に、CDが回り、左下に L/R のレベル計。
-     お手持ちの大航海時代の盤の見え方に寄せてある。
-     解析が無くても盤は回るので、どんな流し方でも絵として成立する。 */
+  /* お手本（大航海時代の盤）の作りをそのまま起こす。
+       ① ジャケットを背景に敷く
+       ② 左に水色の縦帯
+       ③ 左上にアルバム名を白抜きで
+       ④ 帯に重ねて盤を回す（盤面には曲名を円周に刷る）
+       ⑤ 盤の右にアーティストと曲名の札
+       ⑥ 左下に L／R のレベル計
+     解析が無くても絵として成立する。 */
   art(x, w, h, al) {
     const im = coverImage(al), ok = im && im.complete && im.naturalWidth;
-    const side = Math.min(w, h) * 0.94;
-    const ox = (w - side) / 2, oy = (h - side) / 2;
+    const S0 = Math.min(w, h) * 0.96;
+    const ox = (w - S0) / 2, oy = (h - S0) / 2;
+    const c = cur(), tk = c && c.al === al ? c.al.tracks[c.i] : al.tracks[0];
+    const u = v => S0 * v;                      /* 盤面の寸法はすべて一辺からの割合で決める */
 
-    /* ① 背景のジャケット */
     x.save();
-    const r = Math.max(6, side * 0.02);
+    const rr = Math.max(5, u(0.012));
     x.beginPath();
-    x.moveTo(ox + r, oy); x.arcTo(ox + side, oy, ox + side, oy + side, r);
-    x.arcTo(ox + side, oy + side, ox, oy + side, r); x.arcTo(ox, oy + side, ox, oy, r);
-    x.arcTo(ox, oy, ox + side, oy, r); x.closePath(); x.clip();
-    if (ok) x.drawImage(im, ox, oy, side, side);
-    else {
-      x.fillStyle = '#171720'; x.fillRect(ox, oy, side, side);
-      x.fillStyle = '#33333f'; x.font = '600 ' + Math.round(side * 0.16) + 'px -apple-system,sans-serif';
-      x.textAlign = 'center'; x.fillText('♪', w / 2, h / 2 + side * 0.06); x.textAlign = 'left';
-    }
+    x.moveTo(ox + rr, oy); x.arcTo(ox + S0, oy, ox + S0, oy + S0, rr);
+    x.arcTo(ox + S0, oy + S0, ox, oy + S0, rr); x.arcTo(ox, oy + S0, ox, oy, rr);
+    x.arcTo(ox, oy, ox + S0, oy, rr); x.closePath(); x.clip();
 
-    /* ② 盤。左寄りに重ねて回す */
-    const dr = side * 0.325;
-    const cx = ox + side * 0.285, cy = oy + side * 0.505;
+    /* ① 背景 */
+    if (ok) x.drawImage(im, ox, oy, S0, S0);
+    else { x.fillStyle = '#132436'; x.fillRect(ox, oy, S0, S0); }
+
+    /* ② 左の水色の帯。奥のジャケットを透かしつつ、白文字が読める濃さにする */
+    const bandW = u(0.40);
+    const bg = x.createLinearGradient(ox, 0, ox + bandW, 0);
+    bg.addColorStop(0,   'rgba(86,178,226,.80)');
+    bg.addColorStop(.72, 'rgba(86,178,226,.72)');
+    bg.addColorStop(1,   'rgba(86,178,226,0)');
+    x.fillStyle = bg; x.fillRect(ox, oy, bandW, S0);
+
+    /* ③ 左上のタイトル（アルバム名）。長ければ縮めて2行まで */
+    const title = cleanName(al.name).toUpperCase();
+    x.textBaseline = 'alphabetic';
+    let ts = u(0.105);
+    const maxW = u(0.355);
+    const wrap = (txt, size) => {
+      x.font = '800 ' + size + 'px "Hiragino Sans",-apple-system,sans-serif';
+      const ws = txt.split(/\s+/), lines = []; let cur2 = '';
+      for (const wd of ws) {
+        const t2 = cur2 ? cur2 + ' ' + wd : wd;
+        if (x.measureText(t2).width > maxW && cur2) { lines.push(cur2); cur2 = wd; } else cur2 = t2;
+      }
+      if (cur2) lines.push(cur2);
+      return lines;
+    };
+    let lines = wrap(title, ts);
+    while (lines.length > 2 && ts > u(0.05)) { ts *= 0.86; lines = wrap(title, ts); }
+    lines = lines.slice(0, 2);
+    x.font = '800 ' + ts + 'px "Hiragino Sans",-apple-system,sans-serif';
+    x.fillStyle = '#fff';
+    x.shadowColor = 'rgba(0,0,0,.35)'; x.shadowBlur = u(0.012); x.shadowOffsetY = u(0.004);
+    lines.forEach((ln, i) => x.fillText(ln, ox + u(0.055), oy + u(0.12) + i * ts * 1.02));
+    x.shadowBlur = 0; x.shadowOffsetY = 0;
+
+    /* ④ 盤 */
+    const dr = u(0.30), cx = ox + u(0.29), cy = oy + u(0.52);
     x.save(); x.translate(cx, cy);
-    /* 影 */
-    x.beginPath(); x.arc(3, 5, dr, 0, 7);
-    x.fillStyle = 'rgba(0,0,0,.42)'; x.fill();
+    x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
     x.beginPath(); x.arc(0, 0, dr, 0, 7); x.save(); x.clip();
-    if (ok) {
-      /* 絵をそのまま貼ると題字が二重に見える。大きく引き伸ばして色だけ拾う。 */
-      const z = dr * 3.6;
-      x.drawImage(im, -z, -z, z * 2, z * 2);
-      x.fillStyle = 'rgba(150,195,240,.42)';          /* 盤の色味 */
-      x.fillRect(-dr, -dr, dr * 2, dr * 2);
-    } else { x.fillStyle = '#20303f'; x.fillRect(-dr, -dr, dr * 2, dr * 2); }
-    /* 虹色の照り返し */
+    if (ok) { const z = dr * 4; x.drawImage(im, -z, -z, z * 2, z * 2); }
+    x.fillStyle = 'rgba(70,165,220,.72)'; x.fillRect(-dr, -dr, dr * 2, dr * 2);
     const sh = x.createLinearGradient(-dr, -dr, dr, dr);
-    sh.addColorStop(0,   'rgba(255,255,255,.34)');
-    sh.addColorStop(.22, 'rgba(180,230,255,.10)');
-    sh.addColorStop(.42, 'rgba(255,255,255,0)');
-    sh.addColorStop(.60, 'rgba(255,200,235,.16)');
-    sh.addColorStop(.80, 'rgba(255,255,255,.24)');
+    sh.addColorStop(0,   'rgba(255,255,255,.42)');
+    sh.addColorStop(.18, 'rgba(190,240,255,.12)');
+    sh.addColorStop(.36, 'rgba(255,255,255,0)');
+    sh.addColorStop(.55, 'rgba(255,205,240,.20)');
+    sh.addColorStop(.72, 'rgba(215,255,225,.16)');
+    sh.addColorStop(.88, 'rgba(255,255,255,.34)');
     sh.addColorStop(1,   'rgba(255,255,255,0)');
     x.fillStyle = sh; x.fillRect(-dr, -dr, dr * 2, dr * 2);
     x.restore();
-    /* 溝 */
-    x.strokeStyle = 'rgba(255,255,255,.07)'; x.lineWidth = 1;
-    for (let i = 1; i <= 9; i++) { x.beginPath(); x.arc(0, 0, dr * (0.30 + i * 0.075), 0, 7); x.stroke(); }
-    /* 中心の透明な輪と穴 */
+    /* 盤面の円周に曲名を刷る（実物の曲目表示に相当） */
+    const ring = trackTitle(tk).toUpperCase().slice(0, 46);
+    x.save(); x.font = '600 ' + u(0.026) + 'px "Hiragino Sans",-apple-system,sans-serif';
+    x.fillStyle = 'rgba(255,255,255,.80)'; x.textAlign = 'center';
+    for (let i = 0; i < ring.length; i++) {
+      const ang = -Math.PI * 0.86 + (i / Math.max(1, ring.length - 1)) * Math.PI * 1.28;
+      x.save(); x.rotate(ang); x.translate(0, -dr * 0.80); x.rotate(Math.PI);
+      x.fillText(ring[i], 0, 0); x.restore();
+    }
+    x.textAlign = 'left'; x.restore();
+    x.strokeStyle = 'rgba(255,255,255,.09)'; x.lineWidth = 1;
+    for (let i = 1; i <= 8; i++) { x.beginPath(); x.arc(0, 0, dr * (0.36 + i * 0.075), 0, 7); x.stroke(); }
     x.beginPath(); x.arc(0, 0, dr * 0.235, 0, 7);
-    x.fillStyle = 'rgba(232,240,248,.55)'; x.fill();
-    x.strokeStyle = 'rgba(255,255,255,.5)'; x.lineWidth = 1; x.stroke();
-    x.beginPath(); x.arc(0, 0, dr * 0.155, 0, 7);
-    x.fillStyle = 'rgba(210,225,240,.30)'; x.fill();
-    x.beginPath(); x.arc(0, 0, dr * 0.075, 0, 7);
-    x.fillStyle = '#0b0b0f'; x.fill();
+    x.fillStyle = 'rgba(236,244,252,.60)'; x.fill();
+    x.strokeStyle = 'rgba(255,255,255,.55)'; x.stroke();
+    x.beginPath(); x.arc(0, 0, dr * 0.155, 0, 7); x.fillStyle = 'rgba(120,190,235,.55)'; x.fill();
+    x.beginPath(); x.arc(0, 0, dr * 0.072, 0, 7); x.fillStyle = 'rgba(20,60,90,.9)'; x.fill();
     x.restore();
     x.beginPath(); x.arc(cx, cy, dr, 0, 7);
-    x.strokeStyle = 'rgba(255,255,255,.22)'; x.lineWidth = 1; x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
 
-    /* ③ 左下の L / R レベル計 */
-    const mx = ox + side * 0.055, my = oy + side * 0.845;
-    const n = 26, gap = side * 0.0145, bw = Math.max(1.5, side * 0.0075);
-    const rowH = side * 0.052;
-    x.font = '600 ' + Math.round(side * 0.042) + 'px "Hiragino Sans",-apple-system,serif';
+    /* ⑤ 盤の右の札。アーティストと曲名 */
+    const px = ox + u(0.50), pw = S0 - u(0.50) - u(0.045);
+    const ph = u(0.235), py = oy + u(0.455);
+    x.fillStyle = 'rgba(226,222,196,.93)';
+    x.fillRect(px, py, pw, ph);
+    x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
+    x.strokeRect(px + u(0.008), py + u(0.008), pw - u(0.016), ph - u(0.016));
+    x.lineWidth = 1;
+    const artist = cleanName(al.artist) || '—';
+    let as = u(0.062);
+    x.font = '800 italic ' + as + 'px "Hiragino Sans",-apple-system,sans-serif';
+    while (x.measureText(artist).width > pw - u(0.06) && as > u(0.026)) {
+      as *= 0.9; x.font = '800 italic ' + as + 'px "Hiragino Sans",-apple-system,sans-serif';
+    }
+    x.fillStyle = '#1b7fc4';
+    x.fillText(artist, px + u(0.03), py + u(0.075));
+    let ns = u(0.042);
+    const name = trackTitle(tk);
+    x.font = 'italic ' + ns + 'px "Hiragino Mincho ProN",Georgia,serif';
+    while (x.measureText(name).width > pw - u(0.06) && ns > u(0.02)) {
+      ns *= 0.9; x.font = 'italic ' + ns + 'px "Hiragino Mincho ProN",Georgia,serif';
+    }
+    x.fillStyle = '#2a2a26';
+    x.fillText(name, px + u(0.03), py + u(0.145));
+    x.font = u(0.03) + 'px "Hiragino Sans",-apple-system,sans-serif';
+    x.fillStyle = 'rgba(60,58,50,.85)';
+    x.fillText(cleanName(al.name), px + u(0.03), py + u(0.198));
+
+    /* ⑥ 左下の L／R */
+    const mx = ox + u(0.06), my = oy + u(0.855), rowH = u(0.052);
+    const n = 24, gap = u(0.0135), bw = Math.max(1.5, u(0.0062));
+    x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
     [['L', lvL], ['R', lvR]].forEach((row, ri) => {
       const y = my + ri * rowH;
-      x.fillStyle = 'rgba(255,255,255,.92)';
-      x.fillText(row[0], mx, y + side * 0.014);
+      x.fillStyle = 'rgba(255,255,255,.95)';
+      x.fillText(row[0], mx, y + u(0.014));
       for (let i = 0; i < n; i++) {
-        const v = band[Math.floor(i * BANDS / n)] * (0.45 + row[1] * 1.1);
-        const bh = Math.max(side * 0.004, v * side * 0.045);
-        x.fillStyle = `rgba(255,255,255,${0.34 + Math.min(0.62, v * 1.3)})`;
-        x.fillRect(mx + side * 0.055 + i * gap, y - bh / 2, bw, bh);
+        const v = band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0);
+        const bh = Math.max(u(0.004), v * u(0.05));
+        x.fillStyle = `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`;
+        x.fillRect(mx + u(0.05) + i * gap, y - bh / 2, bw, bh);
       }
     });
-
     x.restore();
-    /* 拍で外周がふわりと光る */
-    x.beginPath(); x.rect(ox - 2, oy - 2, side + 4, side + 4);
-    x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.30})`;
-    x.lineWidth = 1.5 + beatE * 2.5; x.stroke(); x.lineWidth = 1;
+    x.beginPath(); x.rect(ox - 1, oy - 1, S0 + 2, S0 + 2);
+    x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.22})`;
+    x.lineWidth = 1.5 + beatE * 2; x.stroke(); x.lineWidth = 1;
   },
   disc(x, w, h, al) {
     const cx = w/2, cy = h/2, rad = Math.min(w,h)*0.36, im = coverImage(al);
@@ -1325,9 +1394,10 @@ async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 入口ごしなら音も入口から取る。同じ場所から配られるので解析器に通せる
-     ＝ ビジュアライザーが全部動く。頭出しも効く。 */
-  if (GATE) return { url: '/api/audio?fileid=' + encodeURIComponent(t.id), local: true, cors: true };
+  /* 入口ごしの道は2つ。実機で pCloud が入口からの取得を 410 で拒んだので、
+     まず「入口はリンクを出すだけ、端末が直に取りに行く」を試す。
+     駄目なら入口に流させる。どちらが通るかは pCloud 次第なので決め打ちしない。 */
+  if (GATE) return { url: null, relay: true, local: false, cors: false };
   if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
   if (S.relay) return { url: null, relay: true, local: false, cors: true };
@@ -2704,7 +2774,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v39');
+  L.push('版: v41');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
