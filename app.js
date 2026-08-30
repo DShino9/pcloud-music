@@ -2404,6 +2404,7 @@ async function screenLib() {
         <button class="hbtn" id="shufAll">🔀</button>
         <button class="hbtn" id="smart">条件</button>
         <button class="hbtn" id="carbtn">🚗 車</button>
+        <button class="hbtn" id="jukebtn">🎰 ジューク</button>
       </div>
       <div class="chips">${Object.keys(FILTERS).map(k =>
         `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]}${counts[k] ? ' ' + counts[k] : ''}</button>`).join('')}</div>
@@ -2423,6 +2424,7 @@ async function screenLib() {
   };
   $('#shufAll').onclick = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
   $('#smart').onclick   = () => go('#/smart');
+  $('#jukebtn').onclick = () => go('#/juke');
   $('#carbtn').onclick  = () => {
     if (!cur()) startQueue(shuffle(shown.flatMap(albumRefs)), 0);
     go('#/car');
@@ -3095,6 +3097,7 @@ function screenMenu() {
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="moodgo"><span class="nm">雰囲気を測る</span><span class="sub">${Object.keys(S.mood).length} 枚</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
+      <button class="row" id="juke"><span class="nm">ジュークボックス</span><span class="sub">札で選ぶ</span></button>
       <button class="row" id="car"><span class="nm">車モード</span><span class="sub">大きな的で操作する</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
       <button class="row" id="hist"><span class="nm">聴いた履歴</span><span class="sub">${S.hist.length} 件</span></button>
@@ -3124,6 +3127,7 @@ function screenMenu() {
   $('#routes').onclick = () => go('#/routes');
   $('#moodgo').onclick = () => sweepMood();
   $('#meta').onclick  = () => sweepMeta();
+  $('#juke').onclick  = () => go('#/juke');
   $('#car').onclick   = () => go('#/car');
   $('#lists').onclick = () => go('#/lists');
   $('#hist').onclick  = () => go('#/history');
@@ -3183,6 +3187,7 @@ function routeTo() {
   if (h.startsWith('#/by/artist/')) return screenBy('artist', decodeURIComponent(h.slice(12)));
   if (h.startsWith('#/by/genre/'))  return screenBy('genre',  decodeURIComponent(h.slice(11)));
   if (h === '#/car')             return screenCar();
+  if (h === '#/juke')            return screenJuke();
   if (h === '#/routes')          return screenRoutes();
   if (h === '#/relay')           return screenRelay();
   if (h === '#/code')            return screenCode();
@@ -3568,7 +3573,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v59');
+  L.push('版: v60');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
@@ -3579,6 +3584,91 @@ async function selftest() {
   L.push('― できごと ―');
   L.push(readLog());
   return L.join('\n');
+}
+
+/* ============ ジュークボックス ============ */
+/* 選ぶこと自体を楽しむ画面。棚を「曲目札」に見立て、A1・A2… の番号で選ぶ。
+   1535枚を一望する画面ではない。20枚ずつめくって、目に留まったものを押す。 */
+const JB = { page: 0, per: 20, pick: '' };
+const jbCode = i => String.fromCharCode(65 + Math.floor(i / 5)) + ((i % 5) + 1);
+
+function screenJuke() {
+  $('#hdr').classList.add('hide');
+  const pool = shownAlbums();
+  if (!pool.length) { toast('棚が空です'); go('#/lib'); return; }
+  const pages = Math.max(1, Math.ceil(pool.length / JB.per));
+  if (JB.page >= pages) JB.page = 0;
+  const list = pool.slice(JB.page * JB.per, JB.page * JB.per + JB.per);
+  const c = cur();
+  main().innerHTML = `
+    <div class="jb"><div class="cab">
+      <div class="arch">
+        <div class="tube"></div><div class="tube b"></div>
+        <div class="name">音楽棚</div>
+      </div>
+      <div class="win">
+        <div class="now2">
+          ${c && coverOf(c.al) ? `<img src="${esc(coverOf(c.al))}">` : '<img alt="">'}
+          <div class="t3">
+            <div class="n3">${c ? esc(trackTitle(c.al.tracks[c.i])) : '— 選んでください —'}</div>
+            <div class="a3">${c ? esc([artistOf(c.al), c.al.name].filter(Boolean).join(' — ')) : esc(pool.length + ' 枚から')}</div>
+          </div>
+          <div class="t3" style="flex:0 0 auto;text-align:right">
+            <div class="n3" style="font-size:22px">${esc(JB.pick || jbCode(0))}</div>
+            <div class="a3">${JB.page + 1} / ${pages} 面</div>
+          </div>
+        </div>
+        <div class="rack">${list.map((al, i) => `
+          <button class="strip ${c && c.al.id === al.id ? 'on' : ''}" data-j="${i}">
+            <span class="code">${jbCode(i)}</span>
+            <span class="txt">
+              <span class="s1">${esc(al.name)}</span>
+              <span class="s2">${esc(artistOf(al) || '—')}${albumYear(al) ? ' · ' + esc(albumYear(al)) : ''} · ${al.tracks.length}曲</span>
+            </span>
+          </button>`).join('')}</div>
+      </div>
+      <div class="keys">
+        <button id="jprev">◀</button>
+        <button id="jplay">${au.paused ? '▶' : '⏸'}</button>
+        <button id="jnext">▶</button>
+        <button id="jpage" class="wide">次の面 ⟳</button>
+        <button id="jrand" class="wide">おまかせ 🔀</button>
+        <button id="jclose" class="wide">とじる</button>
+      </div>
+      <div class="foot">札を押すとその盤が掛かります。キーボードなら A1 … D5 の番号でも選べます。</div>
+    </div></div>`;
+  main().querySelectorAll('[data-j]').forEach(b => b.onclick = () => {
+    const al = list[+b.dataset.j];
+    JB.pick = jbCode(+b.dataset.j);
+    startQueue(albumRefs(al).concat(shuffle(pool.filter(x => x !== al)).slice(0, 30).flatMap(albumRefs)), 0);
+    setTimeout(() => screenJuke(), 120);
+  });
+  $('#jprev').onclick  = () => { prevTrack(); setTimeout(screenJuke, 120); };
+  $('#jnext').onclick  = () => { nextTrack(); setTimeout(screenJuke, 120); };
+  $('#jplay').onclick  = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(screenJuke, 120); };
+  $('#jpage').onclick  = () => { JB.page = (JB.page + 1) % pages; screenJuke(); };
+  $('#jrand').onclick  = () => {
+    JB.page = Math.floor(Math.random() * pages);
+    screenJuke();
+    const al = pool[Math.floor(Math.random() * pool.length)];
+    startQueue(albumRefs(al).concat(shuffle(pool).slice(0, 30).flatMap(albumRefs)), 0);
+  };
+  $('#jclose').onclick = () => go('#/lib');
+  /* A1 … D5 で選ぶ */
+  JB.keys = e => {
+    if (location.hash !== '#/juke') return;
+    const k = e.key.toUpperCase();
+    if (/^[A-D]$/.test(k)) { JB.buf = k; return; }
+    if (/^[1-5]$/.test(k) && JB.buf) {
+      const i = (JB.buf.charCodeAt(0) - 65) * 5 + (+k - 1);
+      const b = main().querySelector(`[data-j="${i}"]`);
+      if (b) b.click();
+      JB.buf = '';
+    }
+  };
+  removeEventListener('keydown', JB.prevKeys || (() => {}));
+  JB.prevKeys = JB.keys;
+  addEventListener('keydown', JB.keys);
 }
 
 /* ============ 手元の道具から操る ============ */
@@ -3606,7 +3696,7 @@ addEventListener('keydown', e => {
     'j': () => nudge(-10), 'l': () => nudge(10),
     'm': () => { au.muted = !au.muted; toast(au.muted ? '消音' : '消音を解く', 900); },
     'f': () => go('#/now'), 'v': () => go('#/now'),
-    'c': () => go('#/car'), 'q': () => go('#/queue'),
+    'c': () => go('#/car'), 'q': () => go('#/queue'), 'b': () => go('#/juke'),
     '/': () => go('#/search'), 's': () => go('#/search'),
     'g': () => go('#/lib'),
     'Escape': () => go(location.hash === '#/lib' ? '#/lib' : '#/lib'),
