@@ -691,7 +691,7 @@ function trackSheet(al, i) {
 /* 待ち行列を器にする。アルバムを通して聴くのも、棚全体のシャッフルも、
    条件で組んだものも、すべて同じ「並んだ曲」として扱う。 */
 const au = $('#au');
-const P = { q: [], qi: -1, linkCache: new Map(), repeat: LS.get('repeat', 'off') };
+const P = { q: [], qi: -1, linkCache: new Map(), repeat: LS.get('repeat', 'off'), endless: null };
 const cur = () => (P.qi >= 0 ? P.q[P.qi] : null);
 Object.defineProperty(P, 'album', { get: () => (cur() ? cur().al : null) });
 Object.defineProperty(P, 'i',     { get: () => (cur() ? cur().i  : -1) });
@@ -956,15 +956,30 @@ async function playAt(qi) {
     return;
   }
   if (seq !== playSeq) return;
+  refillQueue();
   remember(al, t);
   paintPlayer();
   setMediaSession();
   if (location.hash.startsWith('#/album/') || location.hash === '#/queue') renderRoute();
 }
-function startQueue(list, at = 0) {
+/* 尽きたら継ぎ足す仕掛け。シャッフルは終わらない方がよい。 */
+function startQueue(list, at = 0, endless) {
   if (!list.length) { toast('流すものがありません'); return; }
   P.q = list; P.qi = -1;
+  P.endless = endless || null;
   playAt(at);
+}
+/* 残りが少なくなったら、同じ決まりでもう一束を足す。 */
+function refillQueue() {
+  const e = P.endless;
+  if (!e || P.q.length - P.qi > 4) return;
+  let add = [];
+  try { add = e(); } catch (err) { note('継ぎ足せない: ' + (err.message || err)); }
+  if (!add || !add.length) return;
+  /* いま列に入っているものは避ける。同じ曲が続けて来ると台無しになる。 */
+  const have = new Set(P.q.slice(-60).map(r => r.al.id + ':' + r.i));
+  add = add.filter(r => !have.has(r.al.id + ':' + r.i));
+  if (add.length) { P.q.push(...add); paintPlayer(); note('列を継ぎ足した: +' + add.length); }
 }
 const play = (album, i) => startQueue(albumRefs(album), i);
 function enqueueNext(list) {
@@ -1025,6 +1040,7 @@ function setMediaSession() {
 }
 function nextTrack(auto) {
   if (auto && P.repeat === 'one') return playAt(P.qi);
+  refillQueue();
   if (P.qi + 1 < P.q.length) return playAt(P.qi + 1);
   if (P.repeat === 'all' && P.q.length) return playAt(0);
 }
@@ -1357,7 +1373,12 @@ const VIS = {
   vu:    ['アナログVU',      true],
   parts: ['粒子',           true],
 };
-S.vis = LS.get('vis', ['art', 'vinyl', 'disc', 'ladder', 'bars', 'ring']);
+S.vis = LS.get('vis', ['art', 'vinyl', 'bubble', 'pro', 'disc', 'ladder', 'bars', 'ring']);
+/* バブルコンポは作ってあるのに既定に入れ忘れていた。持っていない人には足す。 */
+if (!S.vis.includes('bubble') && !LS.get('visFixed', false)) {
+  S.vis = S.vis.concat(['bubble', 'pro'].filter(k => !S.vis.includes(k)));
+  LS.set('vis', S.vis); LS.set('visFixed', true);
+}
 if (!S.vis.includes('art')) { S.vis = ['art'].concat(S.vis); LS.set('vis', S.vis); }
 
 /* ジャケットのどこが「静か」かを見て、札を置く場所を決める。
@@ -2906,7 +2927,10 @@ async function screenLib() {
     S.cell = { s: 'm', m: 'l', l: 's' }[S.cell];
     LS.set('cell', S.cell); document.body.dataset.cell = S.cell; screenLib();
   };
-  $('#shufAll').onclick = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
+  $('#shufAll').onclick = () => {
+    const pool = shown.flatMap(albumRefs);
+    startQueue(shuffle(pool).slice(0, 200), 0, () => shuffle(pool).slice(0, 120));
+  };
   $('#smart').onclick   = () => go('#/smart');
   $('#jukebtn').onclick = () => go('#/juke');
   $('#carbtn').onclick  = () => {
@@ -3153,7 +3177,7 @@ function playByTags(tags, seed) {
   if (!TMOOD) { toast('雰囲気の索引をまだ読めていません', 3000); return; }
   const q = tagQueue(tags, 80, seed);
   if (!q.length) { toast('その雰囲気の曲が見つかりません', 3000); return; }
-  startQueue((seed ? [seed] : []).concat(q), 0);
+  startQueue((seed ? [seed] : []).concat(q), 0, () => tagQueue(tags, 40, seed));
   go('#/queue');
 }
 /* 札ごとの曲を並べる画面 */
@@ -3444,7 +3468,7 @@ function screenSmart() {
   $('#build').onclick = () => {
     const list = buildSmart();
     if (!list.length) { $('#sm').className = 'msg err'; $('#sm').textContent = '条件に合う曲がありません。少し緩めてください'; return; }
-    startQueue(list, 0); go('#/queue');
+    startQueue(list, 0, () => buildSmart()); go('#/queue');
   };
   $('#back').onclick = () => go('#/lib');
 }
@@ -4371,7 +4395,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v112');
+  L.push('版: v113');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4847,7 +4871,8 @@ function screenJuke() {
     JB.page = Math.floor(Math.random() * pages);
     screenJuke();
     const al = pool[Math.floor(Math.random() * pool.length)];
-    startQueue(albumRefs(al).concat(shuffle(pool).slice(0, 30).flatMap(albumRefs)), 0);
+    const more = () => shuffle(pool).slice(0, 20).flatMap(albumRefs);
+    startQueue(albumRefs(al).concat(more()), 0, more);
   };
   $('#jclose').onclick = () => go('#/lib');
   /* A1 … D5 で選ぶ */
