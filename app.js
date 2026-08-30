@@ -694,7 +694,7 @@ async function playAt(qi) {
       toast('もう一度押してください（音を出す許可が要ります）', 4000);
     } else {
       toast('再生できません: ' + e.name + ' — ' + (e.message || e), 5000);
-      if (S.relay) diagnoseRelay(t);
+      if (GATE) diagnoseGate(t); else if (S.relay) diagnoseRelay(t);
     }
     return;
   }
@@ -748,7 +748,7 @@ function setMediaSession() {
     artwork: cv ? [{ src: cv, sizes: '512x512', type: 'image/jpeg' }] : [],
   });
   const set = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) {} };
-  set('play',  () => au.play());
+  set('play',  () => au.play().catch(() => {}));
   set('pause', () => au.pause());
   set('previoustrack', prevTrack);
   set('nexttrack', nextTrack);
@@ -774,6 +774,7 @@ au.addEventListener('error', () => {
   const c = cur(), nm = c ? c.al.tracks[c.i].name : '';
   note('音が鳴らない: ' + why + ' / ' + nm.slice(-24));
   toast(why + (e.code === 4 ? '（' + nm.split('.').pop() + '）' : ''), 5000);
+  if (GATE && c) diagnoseGate(c.al.tracks[c.i]);
 });
 au.addEventListener('ended', () => nextTrack(true));
 au.addEventListener('play',  paintPlayer);
@@ -785,7 +786,7 @@ au.addEventListener('timeupdate', () => {
       { duration: au.duration, position: au.currentTime, playbackRate: au.playbackRate }); } catch (e) {}
   }
 });
-$('#play').onclick = () => (au.paused ? au.play() : au.pause());
+$('#play').onclick = () => { au.paused ? au.play().catch(e => toast('鳴らせません: ' + e.name)) : au.pause(); };
 $('#next').onclick = nextTrack;
 $('#prev').onclick = prevTrack;
 $('#pcov').onclick  = () => go('#/now');
@@ -1064,7 +1065,7 @@ function screenNow() {
   $('#nclose').onclick = () => go('#/lib');
   $('#nprev').onclick  = () => { prevTrack(); setTimeout(paint, 60); };
   $('#nnext').onclick  = () => { nextTrack(); setTimeout(paint, 60); };
-  $('#nplay').onclick  = () => { au.paused ? au.play() : au.pause(); setTimeout(paint, 60); };
+  $('#nplay').onclick  = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(paint, 60); };
   $('#nq').onclick     = () => go('#/queue');
   $('#nalb').onclick   = () => { const c2 = cur(); if (c2) go('#/album/' + c2.al.id); };
   $('#npick').onclick  = () => nowSheet();
@@ -2050,6 +2051,35 @@ function renderRoute() {
 $('#btnMenu').onclick   = () => go('#/menu');
 $('#btnCovers').onclick = () => sweepCovers(true);
 
+/* 入口ごしの失敗を診る。何が返っているかを実際に取って見る。 */
+async function diagnoseGate(t) {
+  const L = ['曲: ' + t.name.slice(-38)];
+  try {
+    const r = await fetch('/api/audio?fileid=' + encodeURIComponent(t.id),
+      { headers: { Range: 'bytes=0-99' }, credentials: 'same-origin' });
+    const ct = r.headers.get('content-type') || '(種別なし)';
+    L.push('/api/audio ' + r.status + ' ' + ct);
+    const buf = await r.arrayBuffer();
+    const b = new Uint8Array(buf.slice(0, 8));
+    const asc = [...b].map(x => (x >= 32 && x < 127) ? String.fromCharCode(x) : '.').join('');
+    L.push(buf.byteLength + 'バイト 先頭「' + asc + '」');
+    if (asc.startsWith('{')) L.push('→ 音ではなく文字（入口かpCloudが断っている）');
+    else if (asc.startsWith('ID3') || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) L.push('→ mp3 の中身');
+    else if (asc.includes('ftyp')) L.push('→ m4a の中身');
+    else if (asc.startsWith('fLaC')) L.push('→ flac の中身');
+    else if (asc.startsWith('RIFF')) L.push('→ wav の中身');
+    else if (asc.slice(0,4) === '0&\u00b2v' || b[0] === 0x30) L.push('→ wma の可能性（ブラウザでは鳴らせません）');
+    else L.push('→ 見覚えのない中身');
+  } catch (e) { L.push('取れません: ' + (e.message || e)); }
+  const el = document.createElement('audio');
+  const ext = t.name.slice(t.name.lastIndexOf('.') + 1).toLowerCase();
+  const mime = { mp3:'audio/mpeg', m4a:'audio/mp4', flac:'audio/flac', wav:'audio/wav',
+                 ogg:'audio/ogg', opus:'audio/ogg', wma:'audio/x-ms-wma', aac:'audio/aac' }[ext];
+  if (mime) L.push('この形式（' + ext + '）を鳴らせるか: ' + (el.canPlayType(mime) || 'いいえ'));
+  note('入口診断: ' + L.join(' / '));
+  shout('入口', L.join('  /  '));
+}
+
 /* 中継所が返しているものを、実際に取って見る。推測で往復しないため。 */
 async function diagnoseRelay(t) {
   const L = [];
@@ -2378,7 +2408,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v30');
+  L.push('版: v31');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
