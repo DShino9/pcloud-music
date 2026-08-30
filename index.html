@@ -17,7 +17,7 @@
   --dim2:#6a6a7a;
   --bg:#101014; --bg2:#17171d; --line:#26262f; --fg:#ececf1; --dim:#8b8b99;
   --accent:#6ea8fe; --warn:#e5a34a; --ok:#5fbf7f; --danger:#e06c75;
-  --bar:52px; --hdr:44px; --top:env(safe-area-inset-top,0px);
+  --bar:68px; --hdr:44px; --top:env(safe-area-inset-top,0px);
   --safe-b:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
@@ -231,7 +231,7 @@ body.playing .libbar{top:calc(var(--top) + var(--hdr) + var(--bar))}
 body.playing main{padding-top:calc(var(--top) + var(--hdr) + var(--bar) + 12px)}
 body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 .sweep{top:calc(var(--top) + var(--hdr))}
-#player .pc{width:38px;height:38px;border-radius:6px;object-fit:cover;background:#22222b;flex:none}
+#player .pc{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#22222b;flex:none}
 #player .info{flex:1;min-width:0;cursor:pointer}
 #player .nx{display:none;font-size:10.5px;color:var(--dim2,#6a6a7a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .qbtn{flex:none;padding:7px 10px;border-radius:9px;border:1px solid var(--line);
@@ -253,11 +253,11 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
   background:#2a2a33;outline:none}
 .volbig input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:30px;height:30px;
   border-radius:50%;background:#6ea8fe;cursor:pointer}
-#player .ti{font-size:13px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#player .ar{font-size:10.5px;line-height:1.3;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#player .ti{font-size:16px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#player .ar{font-size:12.5px;line-height:1.3;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .ctl{display:flex;align-items:center;gap:1px}
 #player .ctl #pdots{width:28px;font-size:16px;color:var(--dim)}
-#player .ctl button{width:34px;height:34px;border-radius:50%;font-size:14px;display:flex;align-items:center;justify-content:center}
+#player .ctl button{width:42px;height:42px;border-radius:50%;font-size:17px;display:flex;align-items:center;justify-content:center}
 #player .ctl button:active{background:#2c2c38}
 #seek{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
 #player.gone{display:none}
@@ -416,6 +416,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=66"></script>
+<script src="./app.js?v=67"></script>
 </body>
 </html>

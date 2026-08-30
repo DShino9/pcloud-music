@@ -1267,14 +1267,21 @@ function quietSpot(im, id) {
     const box = { br: [0.50,0.60,0.97,0.86], tr: [0.50,0.28,0.97,0.54],
                   mr: [0.46,0.40,0.97,0.66], tc: [0.36,0.20,0.97,0.46],
                   bs: [0.30,0.79,0.97,0.965] };   /* 下端の帯。たいていの絵で一番おとなしい */
-    let best = Infinity;
+    /* 肌が入る場所は、どれだけ静かでも選ばない。
+       点を引くだけでは足りず、実際に顔を隠していた。ここは足切りにする。 */
+    const scored = [];
     for (const [k, r] of Object.entries(box)) {
-      let sum = 0, cnt = 0;
+      let sum = 0, cnt = 0, sk = 0;
       for (let y = Math.floor(r[1]*n); y < Math.ceil(r[3]*n); y++)
-        for (let x = Math.floor(r[0]*n); x < Math.ceil(r[2]*n); x++) { sum += e[y*n+x]; cnt++; }
-      const v = sum / Math.max(1, cnt);
-      if (v < best) { best = v; pick = k; }
+        for (let x = Math.floor(r[0]*n); x < Math.ceil(r[2]*n); x++) {
+          sum += e[y*n+x]; sk += skin[y*n+x]; cnt++;
+        }
+      scored.push({ k, e: sum / Math.max(1, cnt), s: sk / Math.max(1, cnt) });
     }
+    const clean2 = scored.filter(v => v.s < 0.015);
+    const use = clean2.length ? clean2 : scored.slice().sort((a, b) => a.s - b.s).slice(0, 1);
+    use.sort((a, b) => a.e - b.e);
+    pick = use[0].k;
   } catch (err) { /* 読めない絵は既定の位置で */ }
   salCache.set(id, pick);
   return pick;
@@ -1428,48 +1435,54 @@ const VD = {
     x.rotate(spin);
     x.beginPath(); x.arc(0, 0, dr, 0, 7); x.save(); x.clip();
     /* 盤の地。実物は暗い銀。ジャケットの色はごく薄く透ける程度。 */
-    if (ok) { const z = dr * 4; x.globalAlpha = 0.28; x.drawImage(im, -z, -z, z * 2, z * 2); x.globalAlpha = 1; }
-    const base = x.createRadialGradient(-dr * 0.25, -dr * 0.3, dr * 0.1, 0, 0, dr);
-    base.addColorStop(0,   'rgba(150,158,170,.92)');
-    base.addColorStop(.42, 'rgba(96,104,118,.94)');
-    base.addColorStop(.78, 'rgba(64,70,82,.95)');
-    base.addColorStop(1,   'rgba(40,45,55,.95)');
+    if (ok) { const z = dr * 4; x.globalAlpha = 0.16; x.drawImage(im, -z, -z, z * 2, z * 2); x.globalAlpha = 1; }
+    /* 記録面は鏡。写るのは周りの景色なので、上は暗く、下は明るい。 */
+    const base = x.createLinearGradient(0, -dr, 0, dr);
+    base.addColorStop(0,   'rgba(26,29,36,.97)');
+    base.addColorStop(.34, 'rgba(46,51,61,.96)');
+    base.addColorStop(.52, 'rgba(104,112,126,.95)');
+    base.addColorStop(.70, 'rgba(58,64,76,.96)');
+    base.addColorStop(1,   'rgba(22,25,31,.97)');
     x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
 
-    /* 虹は光が当たった扇形にだけ出る。全面に散らすと嘘になる。 */
+    /* 虹の正体は回折。見る角度を止めれば、色は「半径」に沿って変わる。
+       角度で回すと嘘になる（前はそれをやっていた）。
+       同心の色の帯を作り、光が当たった扇形だけを残す。 */
     if (x.createConicGradient) {
-      const cg = x.createConicGradient(spin * 0.9, 0, 0);
-      const turns = 3, steps = turns * 24;
+      const rg = x.createRadialGradient(0, 0, dr * 0.19, 0, 0, dr);
+      const turns = 2.4, steps = 60, h0 = (spin * 34) % 360;
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
-        cg.addColorStop(t, `hsl(${(t * 360 * turns) % 360}, 100%, 58%)`);
+        rg.addColorStop(t, `hsl(${(h0 + t * 360 * turns) % 360}, 96%, 56%)`);
       }
       x.save();
       x.globalCompositeOperation = 'screen';
-      x.globalAlpha = 0.85;
-      x.fillStyle = cg; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+      x.globalAlpha = 0.92;
+      x.fillStyle = rg; x.fillRect(-dr, -dr, dr * 2, dr * 2);
       x.globalAlpha = 1;
-      /* 扇形の窓。向かい合う2か所だけ残し、あとは削る */
-      const win = x.createConicGradient(spin * 0.9 + 0.6, 0, 0);
-      const keep = [0.00, 0.14, 0.50, 0.64];
-      for (let i = 0; i <= 48; i++) {
-        const t = i / 48;
-        const near = Math.min(...keep.map(k => Math.abs(((t - k + 1.5) % 1) - 0.5) === 0 ? 1 : Math.min(Math.abs(t - k), 1 - Math.abs(t - k))));
-        const a2 = Math.max(0, Math.min(1, 1 - Math.exp(-Math.pow(near / 0.075, 2)) ));
-        win.addColorStop(t, `rgba(0,0,0,${a2.toFixed(3)})`);
+      /* 光の当たる向きは盤が回っても動かない。窓だけは回さない。 */
+      const win = x.createConicGradient(-spin + 2.15, 0, 0);
+      const keep = [0.00, 0.50], wid = 0.085;
+      for (let i = 0; i <= 72; i++) {
+        const t = i / 72;
+        let near = 1;
+        for (const k of keep) {
+          const d0 = Math.abs(t - k); near = Math.min(near, Math.min(d0, 1 - d0));
+        }
+        const a2 = 1 - Math.exp(-Math.pow(near / wid, 2) * 1.6);
+        win.addColorStop(t, `rgba(0,0,0,${Math.max(0, Math.min(1, a2)).toFixed(3)})`);
       }
       x.globalCompositeOperation = 'destination-out';
       x.fillStyle = win; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      /* 中心側と最外周は虹を消す */
+      /* 記録面の外だけに出る。内側の透明部と最外周には虹は無い。 */
       const fade = x.createRadialGradient(0, 0, 0, 0, 0, dr);
-      fade.addColorStop(0,   'rgba(0,0,0,1)');
-      fade.addColorStop(.30, 'rgba(0,0,0,.9)');
-      fade.addColorStop(.55, 'rgba(0,0,0,0)');
-      fade.addColorStop(.94, 'rgba(0,0,0,0)');
-      fade.addColorStop(1,   'rgba(0,0,0,.85)');
+      fade.addColorStop(0,    'rgba(0,0,0,1)');
+      fade.addColorStop(.185, 'rgba(0,0,0,1)');
+      fade.addColorStop(.24,  'rgba(0,0,0,0)');
+      fade.addColorStop(.95,  'rgba(0,0,0,0)');
+      fade.addColorStop(.985, 'rgba(0,0,0,1)');
       x.fillStyle = fade; x.fillRect(-dr, -dr, dr * 2, dr * 2);
       x.restore();
-      /* 削った跡に地を戻す */
       x.save();
       x.globalCompositeOperation = 'destination-over';
       x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
@@ -1478,8 +1491,8 @@ const VD = {
 
     /* 記録面の細い溝。光ってこそ盤に見える */
     x.save(); x.beginPath(); x.arc(0, 0, dr, 0, 7); x.clip();
-    for (let i = 0; i < 90; i++) {
-      const rr2 = dr * (0.30 + i * 0.0076);
+    for (let i = 0; i < 110; i++) {
+      const rr2 = dr * (0.195 + i * 0.0072);
       x.strokeStyle = i % 2 ? 'rgba(255,255,255,.045)' : 'rgba(0,0,0,.06)';
       x.lineWidth = 1;
       x.beginPath(); x.arc(0, 0, rr2, 0, 7); x.stroke();
@@ -1517,7 +1530,7 @@ const VD = {
     const step = Math.min(0.115, (Math.PI * 1.5) / Math.max(1, ring.length));
     const start = -((ring.length - 1) * step) / 2;
     for (let i = 0; i < ring.length; i++) {
-      x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.84);
+      x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.62);
       x.fillText(ring[i], 0, 0); x.restore();
     }
     x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.restore();
@@ -1529,16 +1542,22 @@ const VD = {
       x.beginPath(); x.arc(0, 0, rr2, 0, 7); x.stroke();
     }
     x.restore();
-    /* 中心の透明な輪。実物は素通しに近い */
-    x.beginPath(); x.arc(0, 0, dr * 0.235, 0, 7);
-    x.fillStyle = 'rgba(245,249,255,.34)'; x.fill();
-    x.strokeStyle = 'rgba(255,255,255,.45)'; x.lineWidth = 1; x.stroke();
-    x.beginPath(); x.arc(0, 0, dr * 0.185, 0, 7);
-    x.strokeStyle = 'rgba(180,200,220,.55)'; x.stroke();
-    x.beginPath(); x.arc(0, 0, dr * 0.155, 0, 7);
-    x.fillStyle = 'rgba(228,238,248,.55)'; x.fill();
-    x.beginPath(); x.arc(0, 0, dr * 0.070, 0, 7);
-    x.fillStyle = 'rgba(12,14,18,.92)'; x.fill();
+    /* 中心。実物は 穴15mm → 透明部23mm → そこから記録面。比率をそのまま使う。 */
+    x.beginPath(); x.arc(0, 0, dr * 0.192, 0, 7);
+    const hub = x.createLinearGradient(0, -dr * 0.19, 0, dr * 0.19);
+    hub.addColorStop(0, 'rgba(150,160,175,.55)');
+    hub.addColorStop(.5, 'rgba(210,222,238,.42)');
+    hub.addColorStop(1, 'rgba(120,130,146,.55)');
+    x.fillStyle = hub; x.fill();
+    x.strokeStyle = 'rgba(255,255,255,.30)'; x.lineWidth = 1; x.stroke();
+    /* 積み重ね用の輪（実物にある段差） */
+    x.beginPath(); x.arc(0, 0, dr * 0.163, 0, 7);
+    x.strokeStyle = 'rgba(255,255,255,.22)'; x.lineWidth = Math.max(1, dr * 0.012); x.stroke();
+    x.beginPath(); x.arc(0, 0, dr * 0.150, 0, 7);
+    x.strokeStyle = 'rgba(0,0,0,.30)'; x.lineWidth = 1; x.stroke();
+    x.beginPath(); x.arc(0, 0, dr * 0.125, 0, 7);
+    x.fillStyle = 'rgba(8,9,12,.96)'; x.fill();
+    x.strokeStyle = 'rgba(255,255,255,.35)'; x.stroke();
     x.restore();
     x.beginPath(); x.arc(cx, cy, dr, 0, 7);
     x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
@@ -1553,25 +1572,35 @@ const VD = {
     x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
     x.strokeRect(px + u(0.008), py + u(0.008), pw - u(0.016), ph - u(0.016));
     x.lineWidth = 1;
+    /* 行の位置は札の高さから割り出す。決め打ちだと低い札からはみ出す（実際に出ていた）。 */
+    const pad = u(0.030), inner = ph - pad * 2;
+    const y1 = py + pad + inner * 0.30;
+    const y2 = py + pad + inner * 0.62;
+    const y3 = py + pad + inner * 0.92;
     const artist = artistOf(al) || cleanName(al.name);
-    let as = u(0.062);
+    let as = Math.min(u(0.062), inner * 0.30);
     x.font = '800 italic ' + as + 'px "Hiragino Sans",-apple-system,sans-serif';
     while (x.measureText(artist).width > pw - u(0.06) && as > u(0.026)) {
       as *= 0.9; x.font = '800 italic ' + as + 'px "Hiragino Sans",-apple-system,sans-serif';
     }
     x.fillStyle = '#1b7fc4';
-    x.fillText(artist, px + u(0.03), py + u(0.075));
-    let ns = u(0.042);
+    x.fillText(artist, px + u(0.03), y1);
+    let ns = Math.min(u(0.042), inner * 0.24);
     const name = trackTitle(tk);
     x.font = 'italic ' + ns + 'px "Hiragino Mincho ProN",Georgia,serif';
     while (x.measureText(name).width > pw - u(0.06) && ns > u(0.02)) {
       ns *= 0.9; x.font = 'italic ' + ns + 'px "Hiragino Mincho ProN",Georgia,serif';
     }
     x.fillStyle = '#2a2a26';
-    x.fillText(name, px + u(0.03), py + u(0.145));
-    x.font = u(0.03) + 'px "Hiragino Sans",-apple-system,sans-serif';
+    x.fillText(name, px + u(0.03), y2);
+    let ls = Math.min(u(0.030), inner * 0.17);
+    const alb = cleanName(al.name);
+    x.font = ls + 'px "Hiragino Sans",-apple-system,sans-serif';
+    while (x.measureText(alb).width > pw - u(0.06) && ls > u(0.016)) {
+      ls *= 0.9; x.font = ls + 'px "Hiragino Sans",-apple-system,sans-serif';
+    }
     x.fillStyle = 'rgba(60,58,50,.85)';
-    x.fillText(cleanName(al.name), px + u(0.03), py + u(0.198));
+    x.fillText(alb, px + u(0.03), y3);
 
     /* ⑥ 左下の L／R */
     drawMeter(x, u, ox, oy, S0, spot);
@@ -3782,7 +3811,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v66');
+  L.push('版: v67');
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
