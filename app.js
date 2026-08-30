@@ -2059,6 +2059,13 @@ async function diagnoseGate(t) {
       { headers: { Range: 'bytes=0-99' }, credentials: 'same-origin' });
     const ct = r.headers.get('content-type') || '(種別なし)';
     L.push('/api/audio ' + r.status + ' ' + ct);
+    if (ct.includes('json')) {
+      const txt = await r.text();
+      L.push('入口の言い分: ' + txt.slice(0, 300));
+      note('入口診断: ' + L.join(' / '));
+      shout('入口', L.join('  /  '));
+      return;
+    }
     const buf = await r.arrayBuffer();
     const b = new Uint8Array(buf.slice(0, 8));
     const asc = [...b].map(x => (x >= 32 && x < 127) ? String.fromCharCode(x) : '.').join('');
@@ -2408,7 +2415,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v32');
+  L.push('版: v33');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));

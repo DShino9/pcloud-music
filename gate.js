@@ -188,12 +188,37 @@ export default {
       if (!fileid) return j({ error: 'fileid が要ります' }, 400);
       const d = await call('getpublinkdownload', { fileid, forcedownload: 0 });
       if (d.result !== 0) return j({ error: d.error, result: d.result }, 502);
-      const target = 'https://' + d.hosts[0] + d.path;
       const h = new Headers();
       const range = req.headers.get('Range');
       if (range) h.set('Range', range);
-      const up = await fetch(target, { headers: h, redirect: 'follow' });
-      if (!up.ok && up.status !== 206) return j({ error: 'pCloud が中身を渡しません', status: up.status }, 502);
+      h.set('user-agent', 'Mozilla/5.0 (compatible; ongakudana/1.0)');
+      /* 配信元は複数返る。順に当たり、駄目ならリンクを取り直してもう一巡。 */
+      let up = null, tried = [];
+      let hosts = d.hosts || [];
+      for (let round = 0; round < 2 && !up; round++) {
+        for (const hh of hosts) {
+          let r2;
+          try { r2 = await fetch('https://' + hh + d.path, { headers: h, redirect: 'follow' }); }
+          catch (e) { tried.push(hh.split('.')[0] + ':×'); continue; }
+          if (r2.ok || r2.status === 206) { up = r2; break; }
+          tried.push(hh.split('.')[0] + ':' + r2.status);
+        }
+        if (!up && round === 0) {
+          const d2 = await call('getpublinkdownload', { fileid, forcedownload: 0 });
+          if (d2.result !== 0) break;
+          hosts = d2.hosts || []; d.path = d2.path;
+        }
+      }
+      if (!up) {
+        /* 入口から取れないなら、端末に直接取りに行かせる。
+           リンクが要求元に縛られている場合はこちらで通ることがある。 */
+        if (url.searchParams.get('nored') !== '1') {
+          return new Response(null, { status: 302, headers: {
+            'location': 'https://' + (hosts[0] || d.hosts[0]) + d.path, 'cache-control': 'no-store' } });
+        }
+        return j({ error: 'pCloud が中身を渡しません', tried }, 502);
+      }
+      const target = up.url || ('https://' + hosts[0] + d.path);
       const out = new Headers();
       for (const k of ['content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
         const v = up.headers.get(k); if (v) out.set(k, v);
