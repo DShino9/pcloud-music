@@ -7,7 +7,10 @@ self.addEventListener('install', e => {
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
-    .then(ks => Promise.all(ks.filter(k => k !== SHELL && k !== 'tracks-v1').map(k => caches.delete(k))))
+    /* 自分の古い版だけを消す。同じオリジンに道具棚と DroneRadar が
+       同居しているので、それらの控えまで巻き込まない。 */
+    .then(ks => Promise.all(ks.filter(k => k.startsWith('shell-') && k !== SHELL)
+                              .map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', e => {
