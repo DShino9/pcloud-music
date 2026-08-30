@@ -2503,6 +2503,19 @@ function exportIndex() {
 const nfc = s => (s || '').normalize('NFC');
 const pathKey = al => nfc(String(al.path || '').split(' / ').slice(1).join('/')) || nfc(al.artist + '/' + al.name);
 
+/* 集めたジャケットは、置き場に上げなくても届くようにしておく。
+   端末を変えても、控えを入れ忘れても、開けば付いている。 */
+async function loadShippedCovers() {
+  try {
+    const r = await fetch('./ジャケット.json', { cache: 'no-cache' });
+    if (!r.ok) return 0;
+    const j = await r.json();
+    const n = applyIndex(j);
+    if (n) { saveCovers(); note('同梱のジャケットを当てた: ' + n); }
+    return n;
+  } catch (e) { note('同梱のジャケットを読めない: ' + (e.message || e)); return 0; }
+}
+
 function applyIndex(j) {
   let n = 0;
   if (j.covers) { for (const [k, v] of Object.entries(j.covers)) if (!S.covers[k]) { S.covers[k] = v; n++; } }
@@ -2516,7 +2529,10 @@ function applyIndex(j) {
     for (const [k, v] of Object.entries(j.byPath)) {
       if (v && v.skip) continue;
       const al = byKey.get(nfc(k));
-      if (al && !S.covers[al.id]) {
+      /* 自分で選んだものは動かさない。要確認だったものは、確かなものが来たら上げる。 */
+      const had = S.covers[al ? al.id : 0];
+      const upgrade = had && !had.manual && had.sure === false && v.sure !== false;
+      if (al && (!had || upgrade)) {
         S.covers[al.id] = { url: v.url, src: v.src, q: v.q, manual: !!v.manual,
                             score: v.score, sure: v.sure !== false };
         if (v.g || v.y) S.meta[al.id] = { g: v.g || '', y: v.y || '' };
@@ -2660,6 +2676,7 @@ async function screenPick(folderid) {
   $('#use').onclick = async () => {
     S.rootId = folderid; S.rootName = r.metadata.name || '/';
     LS.set('rootId', S.rootId); LS.set('rootName', S.rootName);
+    try { await loadShippedCovers(); } catch (e) {}
     try { await loadIndexFromCloud(); } catch (e) {}
     go('#/lib');
   };
@@ -4078,7 +4095,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v77');
+  L.push('版: v78');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
