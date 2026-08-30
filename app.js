@@ -3338,7 +3338,11 @@ async function screenCover(id) {
   const iffy = S.albums.filter(x => { const c = S.covers[x.id]; return c && !c.manual && c.sure === false; });
   const nextIffy = iffy.find(x => String(x.id) !== String(al.id));
 
+  const mine = location.hash;
   const draw = (cands, loading) => {
+    /* 取り込みは時間が掛かる。その間に画面を移っていたら、書いてはいけない。
+       書くと、いま出ている別の画面を上から潰す（実際に潰していた）。 */
+    if (location.hash !== mine) return;
     const c0 = S.covers[al.id] || {};
     main().innerHTML = `
       <div class="albumhead" style="margin-bottom:12px">
@@ -4095,7 +4099,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v79');
+  L.push('版: v80');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
