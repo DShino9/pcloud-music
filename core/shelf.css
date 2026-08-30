@@ -1,0 +1,103 @@
+/* shelf.css — 棚ものの共通の見た目。
+   正本はここだけ。各アプリへは tools/sync-core.sh で配る。
+   アプリ固有の飾りは、アプリ側の <style> に書くこと（ここには入れない）。 */
+:root{
+  --bg:#101014; --bg2:#17171d; --line:#26262f; --fg:#ececf1;
+  --dim:#8b8b99; --dim2:#6a6a7a;
+  --accent:#6ea8fe; --warn:#e5a34a; --ok:#5fbf7f; --danger:#e06c75;
+  --hdr:44px; --top:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%}
+body{background:var(--bg);color:var(--fg);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;
+  overscroll-behavior-y:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font:inherit}
+.hide{display:none !important}
+
+/* ---- 見出し ---- */
+header{position:fixed;left:0;right:0;top:var(--top);z-index:46;height:var(--hdr);
+  background:rgba(16,16,20,.94);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
+  padding:0 12px;display:flex;align-items:center;gap:9px}
+header h1{font-size:15.5px;margin:0;font-weight:600;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header .hbtn{padding:5px 9px;font-size:12.5px}
+.hbtn{padding:7px 11px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);
+  font-size:13px;white-space:nowrap}
+.hbtn:active{background:#22222b}
+.hbtn.on{border-color:var(--accent);color:var(--accent)}
+main{padding:calc(var(--top) + var(--hdr) + 12px) 14px calc(var(--safe-b) + 30px)}
+
+/* ---- 札（ログイン・設定など） ---- */
+.card{max-width:440px;margin:7vh auto;padding:22px;background:var(--bg2);
+  border:1px solid var(--line);border-radius:16px}
+.card h2{margin:0 0 6px;font-size:19px}
+.card p{color:var(--dim);font-size:13px;margin:0 0 16px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12px;color:var(--dim);margin-bottom:5px}
+.field input,.field select{width:100%;padding:11px 12px;border-radius:10px;background:#0c0c10;
+  border:1px solid var(--line);color:var(--fg)}
+.field input:focus{outline:none;border-color:var(--accent)}
+.primary{width:100%;padding:12px;border-radius:10px;background:var(--accent);
+  color:#0b0b0f;font-weight:600;margin-top:6px}
+.primary:disabled{opacity:.45}
+/* 言づては消さない。画面を組み直しても直前の言葉が残るようにする。 */
+.msg{font-size:13px;margin-top:12px;min-height:19px;line-height:1.6}
+.msg.err{color:var(--danger)} .msg.ok{color:var(--ok)} .msg.warn{color:var(--warn)}
+.note{font-size:12px;color:var(--dim);margin-top:14px;line-height:1.65}
+
+/* ---- 行の並び ---- */
+.rowlist{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg2)}
+.row{display:flex;align-items:center;gap:10px;padding:13px 14px;
+  border-bottom:1px solid var(--line);width:100%;text-align:left}
+.row:last-child{border-bottom:0}
+.row:active{background:#22222b}
+.row .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .sub{font-size:12px;color:var(--dim)}
+
+/* ---- 絞り込みの帯 ---- */
+.bar{position:sticky;top:calc(var(--top) + var(--hdr));z-index:14;
+  background:var(--bg);padding:6px 0 7px;margin:-12px 0 8px}
+.bar .row1{display:flex;gap:6px;align-items:center;overflow-x:auto;padding-bottom:3px;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.bar .row1::-webkit-scrollbar{display:none}
+.bar .row1>*{flex:0 0 auto}
+.bar .hbtn{padding:5px 9px;font-size:12.5px;border-radius:8px}
+.bar select{padding:5px 22px 5px 9px;font-size:12.5px;border-radius:8px;width:auto;
+  background:var(--bg2);border:1px solid var(--line);color:var(--fg)}
+.search{flex:1 1 130px !important;min-width:110px;padding:6px 10px;border-radius:8px;
+  background:#0c0c10;border:1px solid var(--line);color:var(--fg);font-size:13px}
+.search:focus{outline:none;border-color:var(--accent)}
+
+/* ---- 並べる ----
+   --cell で1枚の幅、--ratio で絵の縦横比。ジャケットは 1、箱絵は 3/4。 */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cell,136px),1fr));gap:14px}
+body[data-cell="s"]{--cell:98px} body[data-cell="m"]{--cell:136px} body[data-cell="l"]{--cell:200px}
+.item{text-align:left;width:100%;display:block}
+.cov{position:relative;width:100%;aspect-ratio:var(--ratio,1);border-radius:10px;overflow:hidden;
+  background:linear-gradient(145deg,#22222b,#171720);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center}
+.cov img{width:100%;height:100%;object-fit:var(--fit,cover);display:block;background:#0c0c10}
+.cov .ph{padding:10px;text-align:center;font-size:12px;line-height:1.45;
+  color:rgba(255,255,255,.8);font-weight:600;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical}
+.cov .tag{position:absolute;left:6px;top:6px;font-size:9.5px;padding:2px 6px;border-radius:6px;
+  background:rgba(0,0,0,.72);color:var(--dim);letter-spacing:.03em}
+.cov .off{position:absolute;right:6px;top:6px;font-size:9.5px;padding:2px 6px;border-radius:6px;
+  background:rgba(0,0,0,.72);color:var(--ok)}
+.cov .no{position:absolute;inset:0;background:rgba(10,10,14,.62);display:flex;
+  align-items:flex-end;justify-content:center;padding:8px;font-size:11px;color:var(--warn)}
+.item .t{font-size:12.5px;margin-top:7px;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.item .s{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.empty{color:var(--dim);text-align:center;padding:40px 20px;font-size:13.5px;line-height:1.8}
+
+/* ---- 言づて ---- */
+#toast{position:fixed;left:50%;bottom:calc(var(--safe-b) + 22px);transform:translateX(-50%);
+  background:rgba(28,28,36,.96);border:1px solid var(--line);border-radius:10px;
+  padding:9px 15px;font-size:13px;z-index:99;opacity:0;pointer-events:none;
+  transition:opacity .18s;max-width:88vw;text-align:center}
+#toast.show{opacity:1}
+pre.log{white-space:pre-wrap;word-break:break-all;font-size:11.5px;color:var(--dim);
+  background:#0c0c10;border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px}

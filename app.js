@@ -1329,6 +1329,34 @@ function quietSpot(im, id) {
   salCache.set(id, pick);
   return pick;
 }
+/* 盤は左下に置く決まりだが、そこに顔がある絵では盤をもっと外へ逃がす。
+   逃がさないと、何度言われても顔を隠し続けることになる。 */
+const nudgeCache = new Map();
+function discNudge(im, id) {
+  if (nudgeCache.has(id)) return nudgeCache.get(id);
+  let out = { dx: 0, dy: 0 };
+  try {
+    const n = 32, c = document.createElement('canvas');
+    c.width = c.height = n;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(im, 0, 0, n, n);
+    const d = g.getImageData(0, 0, n, n).data;
+    let sk = 0, cnt = 0;
+    for (let y = Math.floor(0.42 * n); y < n; y++)
+      for (let x2 = 0; x2 < Math.ceil(0.60 * n); x2++) {
+        const i = (y * n + x2) * 4, r = d[i], gg = d[i+1], b = d[i+2];
+        const mx = Math.max(r,gg,b), mn = Math.min(r,gg,b);
+        if (r > 90 && gg > 35 && b > 18 && mx - mn > 12 && r > gg && gg >= b &&
+            r - gg > 8 && r - gg < 90) sk++;
+        cnt++;
+      }
+    const f = sk / Math.max(1, cnt);
+    if (f > 0.10) out = { dx: -0.16, dy: 0.10 };
+    else if (f > 0.04) out = { dx: -0.09, dy: 0.05 };
+  } catch (e) {}
+  nudgeCache.set(id, out);
+  return out;
+}
 const BOXES = { br: [0.50,0.60], tr: [0.50,0.28], mr: [0.46,0.40], tc: [0.36,0.20], bs: [0.30,0.775] };
 const BOXH  = { br: 0.235, tr: 0.235, mr: 0.235, tc: 0.235, bs: 0.185 };
 
@@ -1474,7 +1502,8 @@ const VD = {
     x.shadowBlur = 0; x.shadowOffsetY = 0;
 
     /* ④ 盤 */
-    const dr = u(0.52), cx = ox + u(0.055), cy = oy + u(0.90);
+    const nd = ok ? discNudge(im, al.id) : { dx: 0, dy: 0 };
+    const dr = u(0.52), cx = ox + u(0.055 + nd.dx), cy = oy + u(0.90 + nd.dy);
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
@@ -1534,24 +1563,31 @@ const VD = {
       x.beginPath(); x.arc(0, 0, lr * 0.86, 0, 7);
       x.strokeStyle = 'rgba(120,92,44,.5)'; x.stroke();
       x.save();
+      x.beginPath(); x.arc(0, 0, lr * 0.88, 0, 7); x.clip();
       x.textAlign = 'center'; x.textBaseline = 'middle';
-      let fs = dr * 0.072;
+      const lw = lr * 1.30;                       /* 端は丸いので、幅は控えめに取る */
+      let fs = dr * 0.066;
       const nm = cleanName(al.name);
       x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
-      while (x.measureText(nm).width > lr * 1.5 && fs > dr * 0.030) {
+      while (x.measureText(nm).width > lw && fs > dr * 0.026) {
         fs *= 0.9; x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
       }
       x.fillStyle = '#40331c'; x.fillText(nm, 0, -lr * 0.32);
-      let fs2 = dr * 0.052;
+      let fs2 = dr * 0.048;
       const ttl = trackTitle(tk);
       x.font = fs2 + 'px "Hiragino Sans",-apple-system,sans-serif';
-      while (x.measureText(ttl).width > lr * 1.5 && fs2 > dr * 0.026) {
+      while (x.measureText(ttl).width > lw && fs2 > dr * 0.022) {
         fs2 *= 0.9; x.font = fs2 + 'px "Hiragino Sans",-apple-system,sans-serif';
       }
       x.fillStyle = 'rgba(64,51,28,.9)'; x.fillText(ttl, 0, lr * 0.06);
-      x.font = (dr * 0.046) + 'px "Hiragino Sans",-apple-system,sans-serif';
+      let fs3 = dr * 0.042;
+      const arn = artistOf(al) || '';
+      x.font = fs3 + 'px "Hiragino Sans",-apple-system,sans-serif';
+      while (x.measureText(arn).width > lw && fs3 > dr * 0.020) {
+        fs3 *= 0.9; x.font = fs3 + 'px "Hiragino Sans",-apple-system,sans-serif';
+      }
       x.fillStyle = 'rgba(84,68,38,.85)';
-      x.fillText((artistOf(al) || '').slice(0, 18), 0, lr * 0.46);
+      x.fillText(arn, 0, lr * 0.46);
       x.textAlign = 'left'; x.textBaseline = 'alphabetic';
       x.restore();
       /* 芯の穴 */
@@ -4036,7 +4072,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v71');
+  L.push('版: v72');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
