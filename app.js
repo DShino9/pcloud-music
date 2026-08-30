@@ -1336,17 +1336,52 @@ const VD = {
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
     x.beginPath(); x.arc(0, 0, dr, 0, 7); x.save(); x.clip();
+    /* 盤の地。ジャケットの色を薄く敷き、銀を混ぜる */
     if (ok) { const z = dr * 4; x.drawImage(im, -z, -z, z * 2, z * 2); }
-    x.fillStyle = 'rgba(70,165,220,.72)'; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-    const sh = x.createLinearGradient(-dr, -dr, dr, dr);
-    sh.addColorStop(0,   'rgba(255,255,255,.42)');
-    sh.addColorStop(.18, 'rgba(190,240,255,.12)');
-    sh.addColorStop(.36, 'rgba(255,255,255,0)');
-    sh.addColorStop(.55, 'rgba(255,205,240,.20)');
-    sh.addColorStop(.72, 'rgba(215,255,225,.16)');
-    sh.addColorStop(.88, 'rgba(255,255,255,.34)');
-    sh.addColorStop(1,   'rgba(255,255,255,0)');
-    x.fillStyle = sh; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+    const base = x.createRadialGradient(0, 0, dr * 0.2, 0, 0, dr);
+    base.addColorStop(0,   'rgba(214,222,232,.62)');
+    base.addColorStop(.55, 'rgba(186,198,212,.58)');
+    base.addColorStop(1,   'rgba(150,164,182,.66)');
+    x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+
+    /* 虹は光の回折。角度で色が回るので、円錐の色回しを重ねる。
+       盤の縁ほど強く、中心ほど弱い。回転に合わせて色も流れる。 */
+    if (x.createConicGradient) {
+      const cg = x.createConicGradient(spin * 0.6, 0, 0);
+      const turns = 5;
+      for (let i = 0; i <= turns * 6; i++) {
+        const t = i / (turns * 6);
+        const hue = (t * 360 * turns) % 360;
+        cg.addColorStop(t, `hsla(${hue}, 92%, 62%, .5)`);
+      }
+      x.save();
+      x.globalCompositeOperation = 'overlay';
+      x.fillStyle = cg; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+      /* 中心側は虹を弱める */
+      const fade = x.createRadialGradient(0, 0, 0, 0, 0, dr);
+      fade.addColorStop(0,   'rgba(0,0,0,1)');
+      fade.addColorStop(.34, 'rgba(0,0,0,.55)');
+      fade.addColorStop(1,   'rgba(0,0,0,0)');
+      x.globalCompositeOperation = 'destination-out';
+      x.fillStyle = fade; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+      x.restore();
+    } else {
+      /* 円錐が使えない環境向けの控え */
+      const sh0 = x.createLinearGradient(-dr, -dr, dr, dr);
+      ['rgba(255,120,160,.30)','rgba(255,225,120,.28)','rgba(120,255,200,.26)',
+       'rgba(120,190,255,.30)','rgba(210,140,255,.28)'].forEach((c2, k, arr) =>
+        sh0.addColorStop(k / (arr.length - 1), c2));
+      x.fillStyle = sh0; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+    }
+
+    /* 光が当たっている一筋。盤の艶はこれで出る */
+    const spec = x.createLinearGradient(-dr, -dr * 0.6, dr * 0.4, dr);
+    spec.addColorStop(0,   'rgba(255,255,255,0)');
+    spec.addColorStop(.42, 'rgba(255,255,255,.50)');
+    spec.addColorStop(.52, 'rgba(255,255,255,.62)');
+    spec.addColorStop(.62, 'rgba(255,255,255,.18)');
+    spec.addColorStop(1,   'rgba(255,255,255,0)');
+    x.fillStyle = spec; x.fillRect(-dr, -dr, dr * 2, dr * 2);
     x.restore();
     /* 盤面の円周に曲名を刷る（実物の曲目表示に相当） */
     const ring = trackTitle(tk).toUpperCase().slice(0, 46);
@@ -1360,13 +1395,24 @@ const VD = {
       x.fillText(ring[i], 0, 0); x.restore();
     }
     x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.restore();
-    x.strokeStyle = 'rgba(255,255,255,.09)'; x.lineWidth = 1;
-    for (let i = 1; i <= 8; i++) { x.beginPath(); x.arc(0, 0, dr * (0.36 + i * 0.075), 0, 7); x.stroke(); }
+    x.save(); x.beginPath(); x.arc(0, 0, dr, 0, 7); x.clip();
+    x.lineWidth = 1;
+    for (let i = 0; i < 46; i++) {
+      const rr2 = dr * (0.33 + i * 0.0148);
+      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.055)' : 'rgba(0,0,0,.05)';
+      x.beginPath(); x.arc(0, 0, rr2, 0, 7); x.stroke();
+    }
+    x.restore();
+    /* 中心の透明な輪。実物は素通しに近い */
     x.beginPath(); x.arc(0, 0, dr * 0.235, 0, 7);
-    x.fillStyle = 'rgba(236,244,252,.60)'; x.fill();
-    x.strokeStyle = 'rgba(255,255,255,.55)'; x.stroke();
-    x.beginPath(); x.arc(0, 0, dr * 0.155, 0, 7); x.fillStyle = 'rgba(120,190,235,.55)'; x.fill();
-    x.beginPath(); x.arc(0, 0, dr * 0.072, 0, 7); x.fillStyle = 'rgba(20,60,90,.9)'; x.fill();
+    x.fillStyle = 'rgba(245,249,255,.34)'; x.fill();
+    x.strokeStyle = 'rgba(255,255,255,.45)'; x.lineWidth = 1; x.stroke();
+    x.beginPath(); x.arc(0, 0, dr * 0.185, 0, 7);
+    x.strokeStyle = 'rgba(180,200,220,.55)'; x.stroke();
+    x.beginPath(); x.arc(0, 0, dr * 0.155, 0, 7);
+    x.fillStyle = 'rgba(228,238,248,.55)'; x.fill();
+    x.beginPath(); x.arc(0, 0, dr * 0.070, 0, 7);
+    x.fillStyle = 'rgba(12,14,18,.92)'; x.fill();
     x.restore();
     x.beginPath(); x.arc(cx, cy, dr, 0, 7);
     x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
@@ -3602,7 +3648,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v61');
+  L.push('版: v62');
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
