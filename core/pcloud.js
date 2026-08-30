@@ -231,11 +231,46 @@ async function download(url, onProgress = () => {}, expect = 0) {
   return new Blob(chunks);
 }
 
+
+/* ---- 棚をいじる ----
+   上げるのも消すのも api.pcloud.com へ直に頼める（CORS が開いている）。
+   中身を「取る」ときだけ中継所が要る（getfilelink が参照元で弾かれるため）。
+   消すのは戻せない。呼ぶ側で必ず確かめること。 */
+
+async function ensureFolder(parentid, name, opt = {}) {
+  const j = await api('createfolderifnotexists', { folderid: parentid, name },
+                      { host: opt.host, auth: opt.auth });
+  return j.metadata.folderid;
+}
+
+/* multipart は組み立てを FormData に任せる。名前は NFC に直して渡すこと
+   （macOS から拾った File の名前は NFD のことがある）。 */
+async function uploadFile(folderid, name, blob, opt = {}) {
+  const u = new URL('https://' + (opt.host || HOSTS[0]) + '/uploadfile');
+  u.searchParams.set('auth', opt.auth);
+  u.searchParams.set('folderid', folderid);
+  u.searchParams.set('filename', nfc(name));
+  u.searchParams.set('nopartial', 1);
+  const fd = new FormData();
+  fd.append('file', blob, nfc(name));
+  const r = await fetch(u, { method: 'POST', body: fd, referrerPolicy: 'no-referrer' });
+  if (!r.ok) throw new PCloudError(-1, 'HTTP ' + r.status);
+  const j = await r.json();
+  if (j.result !== 0) throw new PCloudError(j.result, j.error);
+  return (j.metadata && j.metadata[0] && j.metadata[0].fileid) || null;
+}
+
+async function deleteFile(fileid, opt = {}) {
+  await api('deletefile', { fileid }, { host: opt.host, auth: opt.auth });
+  return true;
+}
+
 root.PCloud = {
   VERSION: '1',
   HOSTS, nfc, sha1hex, PCloudError,
   store, logger, api, login,
   relayUrl, relayAlive, indexFolder, shelfCache, download,
+  ensureFolder, uploadFile, deleteFile,
 };
 
 })(window);

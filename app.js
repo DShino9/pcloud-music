@@ -3388,10 +3388,11 @@ function screenTriage() {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = '要確認をまとめて見直す';
   $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.add('hide');
+  /* 怪しい順に出す。合っている見込みが低いものから直す方が効く。 */
   const list = S.albums.filter(al => {
     const c = S.covers[al.id];
     return c && c.url && !c.manual && c.sure === false;
-  });
+  }).sort((a, b) => ((S.covers[a.id] || {}).score || 0) - ((S.covers[b.id] || {}).score || 0));
   if (!list.length) {
     main().innerHTML = '<div class="empty">要確認はありません</div>';
     $('#back').onclick = () => go('#/lib');
@@ -4261,7 +4262,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v98');
+  L.push('版: v99');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
