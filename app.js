@@ -76,6 +76,7 @@ const S = {
   deco:   LS.get('deco', true),     // 音が読めないとき、飾りとして動かすか
   meter:  LS.get('meter', 'wave'),  // レベル計の見た目
   mood:   LS.get('mood', {}),       // { folderid: {bpm, gain, tag, hand:[手で付けた札]} }
+  vol:    LS.get('vol', 1),         // 音量。端末ごとに覚える
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
   relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
@@ -851,6 +852,26 @@ $('#prev').onclick = prevTrack;
 $('#pcov').onclick  = () => go('#/now');
 $('#pinfo').onclick = () => go('#/now');
 $('#pq').onclick    = () => go('#/queue');
+/* 音量。覚えておく。端末の物理ボタンが効かない場面（PC）で要る。 */
+au.volume = Math.max(0, Math.min(1, S.vol));
+function setVol(v, quiet) {
+  v = Math.max(0, Math.min(1, v));
+  au.volume = v; au.muted = v === 0 ? au.muted : false;
+  S.vol = v; LS.set('vol', v);
+  paintVol();
+  if (!quiet) toast('音量 ' + Math.round(v * 100) + '%', 800);
+}
+function paintVol() {
+  const r = $('#pvol'), m = $('#pmute');
+  if (r) r.value = Math.round((au.muted ? 0 : au.volume) * 100);
+  if (m) m.textContent = au.muted || au.volume === 0 ? '🔇' : au.volume < 0.45 ? '🔉' : '🔊';
+  const r2 = $('#cvol'); if (r2) r2.value = Math.round((au.muted ? 0 : au.volume) * 100);
+  const m2 = $('#cmute'); if (m2) m2.textContent = au.muted || au.volume === 0 ? '🔇' : '🔊';
+}
+$('#pvol').oninput  = e => setVol(+e.target.value / 100, true);
+$('#pmute').onclick = () => { au.muted = !au.muted; paintVol(); };
+au.addEventListener('volumechange', paintVol);
+paintVol();
 $('#pdots').onclick = () => nowSheet();
 
 /* ============ ビジュアライザー ============ */
@@ -2042,6 +2063,10 @@ function screenCar() {
         <button id="cplay" class="big">▶</button>
         <button id="cnext">⏭</button>
       </div>
+      <div class="volbig">
+        <button id="cmute" aria-label="消音">🔊</button>
+        <input id="cvol" type="range" min="0" max="100" step="1" aria-label="音量">
+      </div>
     </div>`;
   const paint = () => {
     const cc = cur(), t = $('#cti'); if (!cc || !t) return;
@@ -2063,6 +2088,9 @@ function screenCar() {
   $('#cplay').onclick = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(paint, 60); };
   $('#cprev').onclick = () => { prevTrack(); setTimeout(paint, 80); };
   $('#cnext').onclick = () => { nextTrack(); setTimeout(paint, 80); };
+  paintVol();
+  $('#cvol').oninput  = e => setVol(+e.target.value / 100, true);
+  $('#cmute').onclick = () => { au.muted = !au.muted; paintVol(); };
   $('#cshuf').onclick = () => { const cc = cur(); P.q = shuffle(P.q); P.qi = cc ? P.q.indexOf(cc) : 0; toast('並べ直しました'); };
   /* 走行中に画面が消えると操作できないので、開いている間は点けておく */
   if (navigator.wakeLock && !V.lock) {
@@ -3540,7 +3568,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v58');
+  L.push('版: v59');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
@@ -3561,7 +3589,7 @@ const typing = e => {
   return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 };
 function nudge(sec) { try { au.currentTime = Math.max(0, au.currentTime + sec); } catch (e) {} }
-function vol(d) { au.volume = Math.max(0, Math.min(1, au.volume + d)); toast('音量 ' + Math.round(au.volume * 100) + '%', 900); }
+function vol(d) { setVol(au.volume + d); }
 function toggle() { au.paused ? au.play().catch(() => {}) : au.pause(); }
 
 addEventListener('keydown', e => {

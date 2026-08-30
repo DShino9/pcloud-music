@@ -237,6 +237,22 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 #player .qbtn{flex:none;padding:7px 10px;border-radius:9px;border:1px solid var(--line);
   background:var(--bg2);font-size:12px;color:var(--dim);white-space:nowrap}
 #player .qbtn b{color:var(--fg);font-weight:600}
+.volwrap{display:flex;align-items:center;gap:6px;flex:none}
+.volwrap button{width:26px;height:26px;font-size:14px;color:var(--dim)}
+#pvol{-webkit-appearance:none;appearance:none;width:78px;height:3px;border-radius:2px;
+  background:#33333f;outline:none}
+#pvol::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+  background:var(--fg);cursor:pointer}
+#pvol::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:var(--fg)}
+@media (max-width:760px){ .volwrap{display:none} }
+/* 車モードと全画面の音量 */
+.volbig{display:flex;align-items:center;gap:12px;margin-top:12px}
+.volbig button{width:52px;height:52px;border-radius:14px;background:#15151b;border:1px solid #2c2c38;
+  font-size:20px;display:flex;align-items:center;justify-content:center;flex:none}
+.volbig input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:8px;border-radius:4px;
+  background:#2a2a33;outline:none}
+.volbig input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:30px;height:30px;
+  border-radius:50%;background:#6ea8fe;cursor:pointer}
 #player .ti{font-size:13px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .ar{font-size:10.5px;line-height:1.3;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .ctl{display:flex;align-items:center;gap:1px}
@@ -333,6 +349,10 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
     <button id="next">⏭</button>
     <button id="pdots" aria-label="操作">⋮</button>
   </div>
+  <div class="volwrap">
+    <button id="pmute" aria-label="消音">🔊</button>
+    <input id="pvol" type="range" min="0" max="100" step="1" value="100" aria-label="音量">
+  </div>
 </div>
 
 <div class="sheetbg hide" id="sheetbg"></div>
@@ -340,6 +360,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=58"></script>
+<script src="./app.js?v=59"></script>
 </body>
 </html>
