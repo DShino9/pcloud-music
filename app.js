@@ -4334,7 +4334,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v107');
+  L.push('版: v108');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4396,7 +4396,7 @@ function jbImg(name) {
   const im = new Image();
   JBIMG[name] = im;
   im.onerror = () => { JBIMG[name] = null; };
-  im.src = './img/' + name + '.webp';
+  im.src = './img/' + name + '.webp?v=2';
   return im;
 }
 const jbReady = im => !!(im && im.complete && im.naturalWidth);
@@ -4695,6 +4695,33 @@ function drawFrontImg(x, w, h, u, panel, t0, noise) {
   }
 }
 
+/* つまみ。回すと音量、押すと面送り。 */
+function wireKnobs(pages) {
+  const kv = $('#kvol'), kp = $('#kpage');
+  const turn = (el, f) => { if (el) el.style.transform = 'rotate(' + (-135 + f * 270) + 'deg)'; };
+  if (kv) {
+    turn(kv, au.muted ? 0 : (au.volume == null ? 1 : au.volume));
+    let dragging = false, y0 = 0, v0 = 0;
+    const move = e => {
+      if (!dragging) return;
+      e.preventDefault();
+      const y = (e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY);
+      const v = Math.max(0, Math.min(1, v0 + (y0 - y) / 160));
+      setVol(v, true); turn(kv, v);
+    };
+    const up = () => { dragging = false; removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    kv.addEventListener('pointerdown', e => {
+      dragging = true; y0 = e.clientY; v0 = au.volume == null ? 1 : au.volume;
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+      e.preventDefault();
+    });
+  }
+  if (kp) {
+    turn(kp, pages > 1 ? JB.page / (pages - 1) : 0);
+    kp.onclick = () => { JB.page = (JB.page + 1) % pages; screenJuke(); };
+  }
+}
+
 function screenJuke() {
   $('#hdr').classList.add('hide');
   const pool = jukePool();
@@ -4719,6 +4746,10 @@ function screenJuke() {
         </select>
         <span class="cnt">${pool.length} 枚</span>
         ${(JB.genre || JB.mood) ? '<button class="hbtn" id="jclr">戻す</button>' : ''}
+      </div>
+      <div class="knobs">
+        <div class="kn"><img id="kvol" src="./img/knob.webp?v=2" alt=""><span>音量</span></div>
+        <div class="kn"><img id="kpage" src="./img/knob.webp?v=2" alt=""><span>面 ${JB.page + 1}/${pages}</span></div>
       </div>
       <div class="win">
         <div class="now2">
@@ -4755,6 +4786,7 @@ function screenJuke() {
                                         : 'この選び方に当てはまる盤がありません。上の二つを戻してください。'}</div>
     </div></div>`;
   wireFront();
+  wireKnobs(pages);
   const reset = () => { JB.page = 0; JB.pick = ''; screenJuke(); };
   $('#jgen').onchange  = e => { JB.genre = e.target.value; LS.set('jbgenre', JB.genre); reset(); };
   $('#jmood').onchange = e => { JB.mood  = e.target.value; LS.set('jbmood',  JB.mood);  reset(); };

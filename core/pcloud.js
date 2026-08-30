@@ -265,12 +265,56 @@ async function deleteFile(fileid, opt = {}) {
   return true;
 }
 
+
+/* ---- 中継所を使わずに中身を読む ----
+   getfilelink はウェブアプリから弾かれる（7010）が、api ホストの file_open / file_read は
+   `Access-Control-Allow-Origin: *` を返すので、ブラウザから直接読める（2026-08-30 実測）。
+   中継所より遅いが、**中継所が無くても・壁の内側にあっても動く**のが強み。
+   大きいものは細切れに読む。file_read は読んだ分だけ位置が進む。 */
+async function readFile(fileid, opt = {}) {
+  const host = opt.host || HOSTS[0];
+  const auth = opt.auth;
+  const onProgress = opt.onProgress || (() => {});
+  const CH = opt.chunk || 4 * 1024 * 1024;
+
+  const o = await api('file_open', { flags: 0, fileid }, { host, auth });
+  const fd = o.fd;
+  try {
+    const sz = await api('file_size', { fd }, { host, auth });
+    const total = sz.size || 0;
+    const chunks = [];
+    let got = 0;
+    while (got < total) {
+      const want = Math.min(CH, total - got);
+      const u = new URL('https://' + host + '/file_read');
+      u.searchParams.set('fd', fd);
+      u.searchParams.set('count', want);
+      u.searchParams.set('auth', auth);
+      const r = await fetch(u, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+      if (!r.ok) throw new PCloudError(-1, 'HTTP ' + r.status);
+      /* 何か起きると、中身の代わりに JSON の言い訳が返る。黙って混ぜない。 */
+      if ((r.headers.get('content-type') || '').includes('json')) {
+        const j = await r.json();
+        throw new PCloudError(j.result || -9, j.error || '読み出しに失敗しました');
+      }
+      const b = await r.arrayBuffer();
+      if (!b.byteLength) throw new PCloudError(-8, '読み出しが途中で止まりました');
+      chunks.push(new Uint8Array(b));
+      got += b.byteLength;
+      onProgress(got, total);
+    }
+    return new Blob(chunks);
+  } finally {
+    try { await api('file_close', { fd }, { host, auth }); } catch (e) {}
+  }
+}
+
 root.PCloud = {
   VERSION: '1',
   HOSTS, nfc, sha1hex, PCloudError,
   store, logger, api, login,
   relayUrl, relayAlive, indexFolder, shelfCache, download,
-  ensureFolder, uploadFile, deleteFile,
+  ensureFolder, uploadFile, deleteFile, readFile,
 };
 
 })(window);

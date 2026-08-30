@@ -376,6 +376,12 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
   font-family:Georgia,"Hiragino Mincho ProN",serif;font-style:italic;font-size:27px;
   color:#ffdca8;text-shadow:0 0 18px rgba(255,180,110,.6),0 2px 0 rgba(0,0,0,.5);letter-spacing:.06em}
 /* 選曲窓 */
+.jb .knobs{display:flex;gap:26px;justify-content:center;margin:10px 0 2px}
+.jb .kn{display:flex;flex-direction:column;align-items:center;gap:4px}
+.jb .kn img{width:64px;height:64px;display:block;cursor:grab;touch-action:none;
+  filter:drop-shadow(0 3px 6px rgba(0,0,0,.6));transition:transform .12s}
+.jb .kn img:active{cursor:grabbing}
+.jb .kn span{font-size:11px;color:#c69b86}
 .jb .brassrow{display:flex;gap:8px;align-items:center;margin:0 12px;padding:9px 12px;
   border-radius:0 0 12px 12px;border:1px solid #4a3120;border-top:0;
   background:linear-gradient(180deg,#c9a35e,#a37f42 55%,#8a6a36);
@@ -495,6 +501,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=107"></script>
+<script src="./app.js?v=108"></script>
 </body>
 </html>
