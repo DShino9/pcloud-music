@@ -155,8 +155,9 @@ async function api(method, params = {}, host, ms = 25000) {
 /* 共有リンクの符号で呼ぶ。合鍵と違って Origin で弾かれない。
    耳読が Mac 無しで鳴るのはこの道を通っているから。 */
 let memCode = null;      /* 入口からもらった符号。保存しない。閉じれば消える。 */
-async function getCode() {
-  if (memCode) return memCode;
+async function getCode(force) {
+  if (memCode && !force) return memCode;
+  if (force) memCode = null;
   const g = await gate('/api/code');
   memCode = { code: g.code, linkpw: g.linkpw || '' };
   if (g.host) S.host = g.host;
@@ -720,8 +721,23 @@ async function fileLink(fileid) {
   if (hit && hit.exp > Date.now()) return hit.url;
   /* 合鍵で出す getfilelink は Origin で弾かれる（7010）。
      符号で出す getpublinkdownload は弾かれない。耳読と同じ道。 */
-  const r = (GATE || S.code) ? await apiPub('getpublinkdownload', { fileid, forcedownload: 0 })
-                             : await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
+  let r;
+  if (GATE || S.code) {
+    /* pCloud は立て込むと「権限がない」と言って断ることがある。
+       一度で諦めず、符号を取り直して少し待って掛け直す。 */
+    for (let k = 0; ; k++) {
+      try { r = await apiPub('getpublinkdownload', { fileid, forcedownload: 0 }); break; }
+      catch (e) {
+        const soft = e.code === 2003 || e.code === 4000 || e.code === 5000 || e.code === -3 || e.code === -4;
+        if (!soft || k >= 2) throw e;
+        note('断られた（' + e.code + '）。取り直して掛け直す ' + (k + 1) + '/2');
+        if (GATE && k === 0) { try { await getCode(true); } catch (e2) {} }
+        await sleep(700 + k * 1500);
+      }
+    }
+  } else {
+    r = await api('getfilelink', { fileid, forcedownload: 0, skipfilename: 0 });
+  }
   const url = 'https://' + r.hosts[0] + r.path;
   P.linkCache.set(fileid, { url, exp: Date.now() + 40 * 60 * 1000 });
   return url;
@@ -929,7 +945,7 @@ async function playAt(qi) {
   } catch (e) {
     if (seq !== playSeq) return;                 /* もう別の曲に移っている */
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
-    toast('曲の場所が分かりません: ' + (e.message || e), 5000);
+    toast('曲の場所が分かりません: ' + linkHint(e), 6000);
     if (S.relay) diagnoseRelay(t);
     return;
   }
@@ -2803,6 +2819,19 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('beforeunload', keepScroll);
 
 /* pCloud が返す番号を、こちらの言葉に置き換える。分からない番号はそのまま見せる。 */
+/* 共有リンクで音の場所を出せなかったときの言葉。生の英語より、次の一手が要る。 */
+function linkHint(e) {
+  if (e.code === 2003) return 'pCloud が今このファイルを渡してくれません（2003）。'
+    + '立て込んでいるか、共有リンクの通信量を使い切ったか、リンクが差し替わった可能性があります。'
+    + '少し待つと戻ることがあります';
+  if (e.code === 7002) return '共有リンクの期限が切れています。作り直して入口に入れ直してください';
+  if (e.code === 7003) return '共有リンクが消えています。作り直して入口に入れ直してください';
+  if (e.code === 7004) return '共有リンクの通信量を使い切りました。日をまたぐか、リンクを作り直してください';
+  if (e.code === 2009) return 'そのファイルが見つかりません（棚を作り直すと直ることがあります）';
+  if (e.code === 4000) return '短い時間に多く叩きすぎました。少し待ってください';
+  return (e.message || e) + (e.code != null ? '（' + e.code + '）' : '');
+}
+
 function loginHint(e) {
   if (e.code === 2000) return 'メールアドレスかパスワードが違います';
   if (e.code === 1000) return 'ログインが通りませんでした';
@@ -4518,7 +4547,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v114');
+  L.push('版: v115');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
