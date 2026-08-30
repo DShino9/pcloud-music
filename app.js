@@ -2885,10 +2885,13 @@ const moodOf = al => {
   const t = albumTagMood(al);
   if (t) return t;
   if (m) return m.tag || autoMood(m);
-  /* MusicBrainz が当たらない盤は、同梱した BPM から決める */
+  /* MusicBrainz が当たらない盤は、同梱した BPM から決める。
+     言葉は曲の札と揃える。二種類の言い方が並ぶと掘りにくい。 */
   const sm = shippedMood(al);
-  return sm ? sm.tag : null;
+  return sm ? (BPM2TAG[sm.tag] || sm.tag) : null;
 };
+/* 速さから決めた言い方を、曲の札と同じ言葉に寄せる */
+const BPM2TAG = { calm: '穏やか', warm: '落ち着く', easy: '心地よい', up: '踊れる', hot: '激しい' };
 /* 同梱の索引にある、BPM から決めた雰囲気 */
 function shippedMood(al) {
   if (!TMOOD) return null;
@@ -3002,7 +3005,7 @@ function moodQueue(seed, n = 60) {
 /* AcousticBrainz は、録音1件ごとに「明るい・切ない・激しい・穏やか・賑やか・
    踊れる・歌なし」を確率で持っている。鍵も要らない。
    MusicBrainz で曲を突き止めてから拾ったものを、索引にして配ってある。 */
-const TAGS = ['明るい','切ない','激しい','穏やか','賑やか','踊れる','明るい音','暗い音'];
+const TAGS = ['明るい','切ない','激しい','穏やか','落ち着く','心地よい','賑やか','踊れる','明るい音','暗い音'];
 /* 声か楽器かの判定と「電子」は、はっきり外すことがあった（歌ものに歌なしが付いた）。
    古い索引に残っていても使わない。 */
 const TAGS_BAD = new Set(['歌なし','電子']);
@@ -4249,7 +4252,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v94');
+  L.push('版: v95');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
