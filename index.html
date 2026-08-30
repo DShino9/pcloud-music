@@ -270,6 +270,20 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
   background:var(--fg);cursor:pointer}
 #pvol::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:var(--fg)}
 @media (max-width:760px){ .volwrap{display:none} }
+/* 狭い画面では、右の部品に幅を取られて曲名が「サン…」まで潰れていた。
+   次の曲は info の三行目に出ているので、札は要らない。 */
+@media (max-width:520px){
+  #player{padding:0 8px;gap:8px}
+  #player .qbtn{display:none}
+  #player .pc{width:46px;height:46px}
+  #player .ti{font-size:14.5px}
+  #player .ar,#player .nx{font-size:10.5px}
+  #player .ctl button{width:38px;height:38px;font-size:16px}
+  #player .ctl #pdots{width:24px}
+}
+@media (max-width:380px){
+  #player .ctl button:first-child{display:none}   /* 前の曲は画面を開けば押せる */
+}
 /* 車モードと全画面の音量 */
 .volbig{display:flex;align-items:center;gap:12px;margin-top:12px}
 .volbig button{width:52px;height:52px;border-radius:14px;background:#15151b;border:1px solid #2c2c38;
@@ -451,6 +465,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=90"></script>
+<script src="./app.js?v=91"></script>
 </body>
 </html>
