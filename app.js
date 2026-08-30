@@ -946,6 +946,16 @@ async function playAt(qi) {
     if (seq !== playSeq) return;                 /* もう別の曲に移っている */
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
     toast('曲の場所が分かりません: ' + linkHint(e), 6000);
+    if (e.code === 2003) linkState().then(st => {
+      note('リンクの様子: ' + JSON.stringify(st));
+      const w = linkStateWords(st);
+      if (st.downloadenabled === false) {
+        toast('共有リンクの取り出しが止められています。通信量を使い切った可能性が高いです。'
+            + '日をまたぐか、リンクを作り直してください', 9000);
+      } else if (w.length) {
+        toast('リンクは生きています（' + w.join('・') + '）。立て込みによる一時的な断りのようです', 8000);
+      }
+    }).catch(err => note('リンクの様子を見られない: ' + (err.message || err)));
     if (S.relay) diagnoseRelay(t);
     return;
   }
@@ -2819,6 +2829,30 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('beforeunload', keepScroll);
 
 /* pCloud が返す番号を、こちらの言葉に置き換える。分からない番号はそのまま見せる。 */
+/* 共有リンクそのものの様子を見る。断られた理由はたいていここに出ている。
+   pCloud は通信量を使い切ると downloadenabled を落とす。 */
+async function linkState() {
+  const j = await apiPub('showpublink', {});
+  const out = {};
+  for (const [k, v] of Object.entries(j)) {
+    if (k === 'metadata' || k === 'result') continue;
+    if (v === null || typeof v === 'object') continue;
+    out[k] = v;
+  }
+  return out;
+}
+function linkStateWords(st) {
+  const w = [];
+  if (st.downloadenabled === false) w.push('★ このリンクは今、取り出しが止められています（通信量を使い切ったときにこうなります）');
+  if (st.expires) w.push('期限: ' + st.expires);
+  if (st.haspassword) w.push('合言葉つき');
+  if (st.traffic != null) w.push('使った通信量: ' + st.traffic);
+  if (st.maxtraffic != null) w.push('上限: ' + st.maxtraffic);
+  if (st.downloads != null) w.push('取り出した回数: ' + st.downloads);
+  if (st.ownerispremium === false) w.push('持ち主は無料の口座（公開リンクの通信量が小さい）');
+  return w;
+}
+
 /* 共有リンクで音の場所を出せなかったときの言葉。生の英語より、次の一手が要る。 */
 function linkHint(e) {
   if (e.code === 2003) return 'pCloud が今このファイルを渡してくれません（2003）。'
@@ -4547,7 +4581,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v116');
+  L.push('版: v117');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4567,6 +4601,13 @@ async function selftest() {
   L.push('中継所: ' + (S.relay || 'なし'));
   L.push('直リンク: ' + (V.link === null ? '未確認' : V.link ? '使える' : '使えない'));
   L.push('');
+  try {
+    const st = await linkState();
+    L.push('― 共有リンクの様子 ―');
+    L.push(JSON.stringify(st));
+    linkStateWords(st).forEach(t => L.push('  ' + t));
+    L.push('');
+  } catch (e) { L.push('共有リンクの様子を見られない: ' + (e.message || e)); L.push(''); }
   L.push('― できごと ―');
   L.push(readLog());
   return L.join('\n');
