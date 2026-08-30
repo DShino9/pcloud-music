@@ -12,7 +12,9 @@
  *    auth だけ無い」状態が実在する。順に4通り試して、通ったもので入る。
  *  - この環境では AbortController が fetch を切らない。時計と競争させて必ず決着させる。
  *  - getfilelink はウェブアプリから弾かれる（7010: 参照元が pcloud.com に限られる）。
- *    中身を受け取るには中継所（Cloudflare Worker）を通す。
+ *    中身を速く受け取るには中継所（Cloudflare Worker）を通す。ただし中継所は必須ではない。
+ *    api ホストの file_open / file_read は CORS が開いているので、中継所が落ちていても
+ *    そちらから読める（遅い・頭出しは効かない）。fetchFile が自動で降りる。
  *  - パスを文字列で組むと macOS の NFD と NFC の食い違いを踏む。folderid / fileid を鍵にする。
  *  - 地域が2つある（api / eapi）。誤った側は result 2000 を返す。
  */
@@ -148,23 +150,32 @@ const relayUrl = (relay, o) =>
   (o.pub ? '&pub=1' : '') +
   '&auth=' + encodeURIComponent(o.auth);
 
-/* 中継所ごしに中身を取る。
-   直リンクは「要求元に縛られている」ことがあり、pCloud が渡してくれない
-   （中継所が 502 と「直リンク」を返す）。そのときは公開リンク経由に降りる。
-   中継所は両方の道を持っているので、こちらが順に頼めばよい。 */
+/* 中身を取る。道は3本あり、上から順に降りる。
+
+     ① 中継所ごしの直リンク              速い・頭出しが効く。本線
+     ② 中継所ごしの公開リンク            直リンクが「要求元に縛られている」ときの逃げ道
+     ③ api ホストを直に読む（readFile）  中継所が無くても・落ちていても届く
+
+   ③ は getfilelink を通らないので 7010 を踏まない。丸ごと読むぶん遅く、
+   頭出しも効かないが、**中継所ゼロで動く。** Cloudflare が落ちた日の逃げ道。
+   中継所が未設定のときは ①② を飛ばして、最初から ③ へ行く。 */
 async function fetchFile(relay, o, onProgress, expect) {
   let first = null;
-  for (const pub of [false, true]) {
-    try {
-      return await download(relayUrl(relay, { ...o, pub }), onProgress, expect);
-    } catch (e) {
-      if (!first) first = e;
-      /* 直リンクで駄目だったときだけ、公開リンクを試す価値がある。 */
-      if (pub) throw new PCloudError(-11,
-        first.message + '（直リンクも公開リンクも駄目でした）');
+  if (relay) {
+    for (const pub of [false, true]) {
+      try {
+        return await download(relayUrl(relay, { ...o, pub }), onProgress, expect);
+      } catch (e) { if (!first) first = e; }
     }
   }
-  throw first;
+  /* ここまで来たら中継所は当てにならない。中継所を使わない道へ降りる。 */
+  try {
+    return await readFile(o.fileid, { host: o.host, auth: o.auth, onProgress });
+  } catch (e) {
+    if (!first) throw e;   /* 中継所を持っていない。③ の言い分をそのまま返す */
+    throw new PCloudError(-11,
+      '中継所が駄目（' + first.message + '）。中継所なしの道も駄目（' + e.message + '）');
+  }
 }
 
 async function relayAlive(relay) {
@@ -223,6 +234,12 @@ function shelfCache(cacheName, prefix) {
       } catch (e) {}
       return out;
     },
+    /* 1枚だけ手元から外す。pCloud には触らない。 */
+    async del(id) {
+      if (!('caches' in window)) return false;
+      try { const c = await caches.open(cacheName); return await c.delete(key(id)); }
+      catch (e) { return false; }
+    },
     async clear() { if ('caches' in window) { try { await caches.delete(cacheName); } catch (e) {} } },
   };
 }
@@ -254,6 +271,7 @@ async function download(url, onProgress = () => {}, expect = 0) {
 /* ---- 棚をいじる ----
    上げるのも消すのも api.pcloud.com へ直に頼める（CORS が開いている）。
    中身を「取る」ときだけ中継所が要る（getfilelink が参照元で弾かれるため）。
+   ただし中継所が無くても readFile なら読める。速さを諦めるかどうかの差。
    消すのは戻せない。呼ぶ側で必ず確かめること。 */
 
 async function ensureFolder(parentid, name, opt = {}) {
