@@ -72,6 +72,7 @@ const S = {
   filter: LS.get('filter', 'all'),
   genre:  LS.get('genre', ''),
   sort:   LS.get('sort', 'artist'),
+  cell:   LS.get('cell', 'm'),      // ジャケットの大きさ 小・中・大
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
   relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
@@ -542,6 +543,7 @@ function nowSheet() {
       }],
      ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
      ['🎞', 'ビジュアライザーを選ぶ', () => go('#/vis')],
+     ['🚗', '車モード（大きく表示）', () => go('#/car')],
      [albumOffline(al) ? '🗑' : '↓', albumOffline(al) ? 'このアルバムを端末から消す' : 'このアルバムを端末に入れる',
       () => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al))]]);
 }
@@ -874,6 +876,7 @@ function coverImage(al) {
 }
 
 const VIS = {
+  art:   ['ジャケット',     false],
   disc:  ['回転ジャケット', false],
   ladder:['L／R レベル',    true],
   bars:  ['スペクトラム',    true],
@@ -883,9 +886,43 @@ const VIS = {
   vu:    ['アナログVU',      true],
   parts: ['粒子',           true],
 };
-S.vis = LS.get('vis', ['disc', 'ladder', 'bars', 'ring', 'scope']);
+S.vis = LS.get('vis', ['art', 'disc', 'ladder', 'bars', 'ring']);
+if (!S.vis.includes('art')) { S.vis = ['art'].concat(S.vis); LS.set('vis', S.vis); }
 
 const VD = {
+  /* ジャケットを主役にしたまま、下端で音を見せる。解析が無くても絵として成立する。 */
+  art(x, w, h, al) {
+    const im = coverImage(al);
+    const side = Math.min(w, h) * 0.86;
+    const ox = (w - side) / 2, oy = (h - side) / 2;
+    x.save();
+    const r = 14;
+    x.beginPath();
+    x.moveTo(ox + r, oy); x.arcTo(ox + side, oy, ox + side, oy + side, r);
+    x.arcTo(ox + side, oy + side, ox, oy + side, r); x.arcTo(ox, oy + side, ox, oy, r);
+    x.arcTo(ox, oy, ox + side, oy, r); x.closePath(); x.clip();
+    if (im && im.complete && im.naturalWidth) x.drawImage(im, ox, oy, side, side);
+    else { x.fillStyle = '#1c1c24'; x.fillRect(ox, oy, side, side);
+           x.fillStyle = '#3a3a48'; x.font = '600 40px -apple-system,sans-serif';
+           x.textAlign = 'center'; x.fillText('♪', w / 2, h / 2 + 14); x.textAlign = 'left'; }
+    /* 下端をうっすら暗くして、棒が読めるようにする */
+    const g = x.createLinearGradient(0, oy + side * 0.62, 0, oy + side);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.62)');
+    x.fillStyle = g; x.fillRect(ox, oy + side * 0.6, side, side * 0.4);
+    const n = 48, bw = side / n, base = oy + side - 10;
+    for (let i = 0; i < n; i++) {
+      const v = band[Math.floor(i * BANDS / n)];
+      const bh = 3 + v * side * 0.26;
+      x.fillStyle = `rgba(255,255,255,${0.30 + v * 0.62})`;
+      x.fillRect(ox + i * bw + 1, base - bh, Math.max(1, bw - 2), bh);
+    }
+    x.restore();
+    /* 拍で外周がふわりと光る */
+    x.beginPath();
+    x.rect(ox - 2, oy - 2, side + 4, side + 4);
+    x.strokeStyle = `rgba(110,168,254,${0.10 + beatE * 0.45})`;
+    x.lineWidth = 2 + beatE * 3; x.stroke(); x.lineWidth = 1;
+  },
   disc(x, w, h, al) {
     const cx = w/2, cy = h/2, rad = Math.min(w,h)*0.36, im = coverImage(al);
     x.save(); x.translate(cx, cy); x.rotate(spin);
@@ -1007,7 +1044,10 @@ function screenNow() {
         <div class="nowinfo"><div class="nt" id="nti"></div><div class="na" id="nar"></div></div>
         <button class="hbtn" id="npick">⚙</button>
       </div>
-      <canvas id="vcv"></canvas>
+      <div class="nowwrap">
+        <canvas id="vcv"></canvas>
+        <div class="nowq" id="nowq"></div>
+      </div>
       <div class="nowname" id="vname"></div>
       <div class="nowbar"><i id="nseek"></i></div>
       <div class="nowctl">
@@ -1018,6 +1058,18 @@ function screenNow() {
       <div class="msg" id="nmsg"></div>
     </div>`;
   const cv = $('#vcv'), ctx = cv.getContext('2d');
+  const paintQ = () => {
+    const q = $('#nowq'); if (!q) return;
+    const next = P.q.slice(P.qi + 1, P.qi + 25);
+    q.innerHTML = `<div class="qh">次に流れる（${Math.max(0, P.q.length - P.qi - 1)}）</div>` +
+      (next.map((r, k) => `
+        <button class="qi" data-nq="${P.qi + 1 + k}">
+          ${coverOf(r.al) ? `<img loading="lazy" src="${esc(coverOf(r.al))}">` : '<img alt="">'}
+          <span class="qt"><span class="q1">${esc(trackTitle(r.al.tracks[r.i]))}</span>
+            <span class="q2">${esc(r.al.artist)}</span></span>
+        </button>`).join('') || '<div class="qe">この曲でおしまいです</div>');
+    q.querySelectorAll('[data-nq]').forEach(b => b.onclick = () => { playAt(+b.dataset.nq); });
+  };
   const paint = () => {
     const cc = cur(), el = $('#nti');
     /* 画面を離れた後も呼ばれることがある。要素が無ければ何もしない。 */
@@ -1031,6 +1083,7 @@ function screenNow() {
     }
     if (vn) vn.textContent = (VIS[list[V.vi]] || VIS.disc)[0] + `（${V.vi + 1}/${list.length}・画面を触ると切り替え）`;
     if (pl) pl.textContent = au.paused ? '▶' : '⏸';
+    paintQ();
   };
   paint();
   const fit = () => {
@@ -1301,6 +1354,134 @@ async function loadIndexFromCloud() {
   return false;
 }
 
+/* ============ 探す ============ */
+/* 1535枚では、絞り込みより探す方が速い。アルバム・アーティスト・曲を一度に見る。 */
+const norm = s => String(s || '').normalize('NFKC').toLowerCase()
+  .replace(/[ぁ-ん]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));   // ひらがなをカタカナに寄せる
+function search(q) {
+  const w = norm(q).split(/\s+/).filter(Boolean);
+  if (!w.length) return { albums: [], tracks: [], artists: [] };
+  const hit = t => w.every(x => norm(t).includes(x));
+  const albums = [], tracks = [], seenA = new Map();
+  for (const al of S.albums) {
+    const meta = al.name + ' ' + al.artist + ' ' + albumGenre(al) + ' ' + albumYear(al);
+    if (hit(meta)) albums.push(al);
+    const art = cleanName(al.artist);
+    if (art && hit(art) && !seenA.has(art)) seenA.set(art, al);
+    if (tracks.length < 60) {
+      al.tracks.forEach((t, i) => {
+        if (tracks.length < 60 && hit(t.name)) tracks.push({ al, i });
+      });
+    }
+  }
+  return { albums: albums.slice(0, 80), tracks, artists: [...seenA.entries()].slice(0, 12) };
+}
+
+function screenSearch() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '探す';
+  $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.add('hide');
+  const q0 = LS.get('q', '');
+  main().innerHTML = `
+    <div class="srch"><input id="sq" placeholder="アルバム・アーティスト・曲名" value="${esc(q0)}"
+      autocapitalize="off" autocorrect="off" enterkeyhint="search">
+      <button class="hbtn" id="sclr">消す</button></div>
+    <div id="sres"></div>`;
+  const box = $('#sq');
+  const draw = () => {
+    const q = box.value.trim();
+    LS.set('q', q);
+    const r = search(q);
+    const out = $('#sres');
+    if (!q) { out.innerHTML = '<div class="empty">言葉を入れてください</div>'; return; }
+    const n = r.albums.length + r.tracks.length + r.artists.length;
+    if (!n) { out.innerHTML = '<div class="empty">見つかりません</div>'; return; }
+    out.innerHTML =
+      (r.artists.length ? `<div class="sect">アーティスト</div>` + r.artists.map(([nm, al]) => `
+        <button class="hit2" data-artist="${esc(nm)}">
+          ${coverOf(al) ? `<img src="${esc(coverOf(al))}">` : '<img alt="">'}
+          <span class="t2"><span class="n2">${esc(nm)}</span>
+            <span class="a2">${S.albums.filter(x => cleanName(x.artist) === nm).length} アルバム</span></span>
+        </button>`).join('') : '') +
+      (r.albums.length ? `<div class="sect">アルバム（${r.albums.length}）</div>` + r.albums.map(al => `
+        <button class="hit2" data-alb="${al.id}">
+          ${coverOf(al) ? `<img loading="lazy" src="${esc(coverOf(al))}">` : '<img alt="">'}
+          <span class="t2"><span class="n2">${esc(al.name)}</span>
+            <span class="a2">${esc(al.artist)} · ${al.tracks.length}曲</span></span>
+        </button>`).join('') : '') +
+      (r.tracks.length ? `<div class="sect">曲（${r.tracks.length}）</div>` + r.tracks.map((x, k) => `
+        <button class="hit2" data-tk="${k}">
+          ${coverOf(x.al) ? `<img loading="lazy" src="${esc(coverOf(x.al))}">` : '<img alt="">'}
+          <span class="t2"><span class="n2">${esc(trackTitle(x.al.tracks[x.i]))}</span>
+            <span class="a2">${esc(x.al.artist)} — ${esc(x.al.name)}</span></span>
+        </button>`).join('') : '');
+    out.querySelectorAll('[data-alb]').forEach(b => b.onclick = () => go('#/album/' + b.dataset.alb));
+    out.querySelectorAll('[data-tk]').forEach(b => b.onclick = () => {
+      const x = r.tracks[+b.dataset.tk]; play(x.al, x.i);
+    });
+    out.querySelectorAll('[data-artist]').forEach(b => b.onclick = () => {
+      box.value = b.dataset.artist; draw();
+    });
+  };
+  let timer = null;
+  box.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 160); };
+  box.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); draw(); box.blur(); } };
+  $('#sclr').onclick = () => { box.value = ''; draw(); box.focus(); };
+  draw();
+  setTimeout(() => { if (!q0) box.focus(); }, 60);
+  $('#back').onclick = () => go('#/lib');
+}
+
+/* ============ 車モード ============ */
+/* 走っているときは、狙わずに押せることが全て。字も的も大きく、選択肢は少なく。 */
+function screenCar() {
+  const c = cur();
+  if (!c) { toast('先に何か流してください'); go('#/lib'); return; }
+  $('#hdr').classList.add('hide');
+  main().innerHTML = `
+    <div class="car">
+      <div class="top">
+        <button id="cx">✕ もどる</button>
+        <button id="cshuf">🔀 シャッフル</button>
+      </div>
+      <div class="art"><img id="cimg" alt=""></div>
+      <div class="ti2" id="cti"></div>
+      <div class="ar2" id="car2"></div>
+      <div class="bar2"><i id="cbar"></i></div>
+      <div class="ctl2">
+        <button id="cprev">⏮</button>
+        <button id="cplay" class="big">▶</button>
+        <button id="cnext">⏭</button>
+      </div>
+    </div>`;
+  const paint = () => {
+    const cc = cur(), t = $('#cti'); if (!cc || !t) return;
+    t.textContent = trackTitle(cc.al.tracks[cc.i]);
+    $('#car2').textContent = [cc.al.artist, cc.al.name].filter(Boolean).join(' — ');
+    const cv = coverOf(cc.al);
+    $('#cimg').src = cv || '';
+    $('#cimg').style.visibility = cv ? 'visible' : 'hidden';
+    $('#cplay').textContent = au.paused ? '▶' : '⏸';
+  };
+  const onT = () => { const b = $('#cbar'); if (b && au.duration) b.style.width = (au.currentTime / au.duration * 100) + '%'; };
+  paint(); onT();
+  if (V.carw) { au.removeEventListener('play', V.carw.p); au.removeEventListener('pause', V.carw.p);
+                au.removeEventListener('timeupdate', V.carw.t); }
+  V.carw = { p: paint, t: onT };
+  au.addEventListener('play', paint); au.addEventListener('pause', paint);
+  au.addEventListener('timeupdate', onT);
+  $('#cx').onclick    = () => go('#/lib');
+  $('#cplay').onclick = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(paint, 60); };
+  $('#cprev').onclick = () => { prevTrack(); setTimeout(paint, 80); };
+  $('#cnext').onclick = () => { nextTrack(); setTimeout(paint, 80); };
+  $('#cshuf').onclick = () => { const cc = cur(); P.q = shuffle(P.q); P.qi = cc ? P.q.indexOf(cc) : 0; toast('並べ直しました'); };
+  /* 走行中に画面が消えると操作できないので、開いている間は点けておく */
+  if (navigator.wakeLock && !V.lock) {
+    navigator.wakeLock.request('screen').then(l => { V.lock = l; l.addEventListener('release', () => { V.lock = null; }); })
+      .catch(() => {});
+  }
+}
+
 /* ============ 索引の持ち出しと取り込み ============ */
 /* ジャケットや★は置き場（オリジン）ごとにしまわれる。
    入口へ移ると前の棚の記録が見えなくなるので、файл で持ち運べるようにする。 */
@@ -1525,6 +1706,7 @@ async function screenLib() {
   $('#hdr').classList.remove('hide');
   $('#title').textContent = S.rootName || '音楽棚';
   $('#btnCovers').classList.remove('hide'); $('#btnMenu').classList.remove('hide');
+  $('#btnSearch').classList.remove('hide');
   $('#back').classList.add('hide');
   if (!S.albums.length) {
     main().innerHTML = '<div class="empty">棚を読んでいます…<br>（初回は少しかかります）</div>';
@@ -1554,6 +1736,7 @@ async function screenLib() {
       </select>
       <button class="hbtn" id="shufAll">🔀 シャッフル</button>
       <button class="hbtn" id="smart">条件で組む</button>
+      <button class="hbtn" id="cell">${{ s: '小', m: '中', l: '大' }[S.cell]}</button>
     </div>`;
   const shown = shownAlbums();
   main().innerHTML = sw + chips + bar + `<div class="grid">${shown.map(al => {
@@ -1586,6 +1769,10 @@ async function screenLib() {
   $('#gensel').onchange  = e => {
     S.genre = e.target.value; LS.set('genre', S.genre);
     scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
+  };
+  $('#cell').onclick = () => {
+    S.cell = { s: 'm', m: 'l', l: 's' }[S.cell];
+    LS.set('cell', S.cell); document.body.dataset.cell = S.cell; screenLib();
   };
   $('#shufAll').onclick  = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
   $('#smart').onclick    = () => go('#/smart');
@@ -1998,6 +2185,7 @@ function screenMenu() {
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
+      <button class="row" id="car"><span class="nm">車モード</span><span class="sub">大きな的で操作する</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
       <button class="row" id="hist"><span class="nm">聴いた履歴</span><span class="sub">${S.hist.length} 件</span></button>
       <button class="row" id="exp"><span class="nm">索引を書き出す</span><span class="sub">${Object.keys(S.covers).length} 枚</span></button>
@@ -2025,6 +2213,7 @@ function screenMenu() {
   $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
   $('#meta').onclick  = () => sweepMeta();
+  $('#car').onclick   = () => go('#/car');
   $('#lists').onclick = () => go('#/lists');
   $('#hist').onclick  = () => go('#/history');
   $('#exp').onclick = () => exportIndex();
@@ -2075,6 +2264,8 @@ function routeTo() {
   if (h === '#/menu')            return screenMenu();
   if (h === '#/now')             return screenNow();
   if (h === '#/vis')             return screenVis();
+  if (h === '#/search')          return screenSearch();
+  if (h === '#/car')             return screenCar();
   if (h === '#/routes')          return screenRoutes();
   if (h === '#/relay')           return screenRelay();
   if (h === '#/code')            return screenCode();
@@ -2086,6 +2277,7 @@ function routeTo() {
   return screenLib();
 }
 $('#btnMenu').onclick   = () => go('#/menu');
+$('#btnSearch').onclick = () => go('#/search');
 $('#btnCovers').onclick = () => sweepCovers(true);
 
 /* 入口ごしの失敗を診る。何が返っているかを実際に取って見る。 */
@@ -2456,7 +2648,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v35');
+  L.push('版: v37');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
@@ -2486,5 +2678,6 @@ if ('serviceWorker' in navigator) {
   }).catch(() => {});
 }
 LS.del('link'); LS.del('cors');   /* 前の版が残した判定は捨てる */
+document.body.dataset.cell = S.cell;
 renderRoute();
 paintPlayer();
