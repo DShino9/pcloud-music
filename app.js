@@ -2337,7 +2337,10 @@ $('#btnCovers').onclick = () => sweepCovers(true);
 async function diagnoseGate(t) {
   const L = ['曲: ' + t.name.slice(-38)];
   try {
-    const r = await fetch('/api/audio?fileid=' + encodeURIComponent(t.id),
+    /* nored=1 で「端末へ投げ直す」のを止め、入口の言い分をそのまま受け取る。
+       投げ直された先は CORS が無いので、読もうとすると Failed to fetch になり
+       肝心の理由が隠れてしまう。 */
+    const r = await fetch('/api/audio?nored=1&fileid=' + encodeURIComponent(t.id),
       { headers: { Range: 'bytes=0-99' }, credentials: 'same-origin' });
     const ct = r.headers.get('content-type') || '(種別なし)';
     L.push('/api/audio ' + r.status + ' ' + ct);
@@ -2701,7 +2704,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v38');
+  L.push('版: v39');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
