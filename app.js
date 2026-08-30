@@ -1065,6 +1065,8 @@ function coverImage(al) {
 
 const VIS = {
   art:   ['ジャケットと盤',  false],
+  bubble:['バブルコンポ',    true],
+  pro:   ['プロ用メーター',  true],
   disc:  ['回転ジャケット', false],
   ladder:['L／R レベル',    true],
   bars:  ['スペクトラム',    true],
@@ -1105,11 +1107,12 @@ function quietSpot(im, id) {
       const i = y * n + x;
       e[i] = Math.abs(lum[i]-lum[i-1]) + Math.abs(lum[i]-lum[i+1])
            + Math.abs(lum[i]-lum[i-n]) + Math.abs(lum[i]-lum[i+n])
-           + skin[i] * 0.9;                      /* 肌は強く避ける */
+           + skin[i] * 3.0;                      /* 肌は強く避ける。弱いと顔を狙って隠す */
     }
     /* 盤は左下に居るので、そこは候補にしない */
-    const box = { br: [0.50,0.60,0.97,0.88], tr: [0.50,0.30,0.97,0.58],
-                  mr: [0.46,0.42,0.97,0.70], tc: [0.36,0.22,0.97,0.50] };
+    const box = { br: [0.50,0.60,0.97,0.86], tr: [0.50,0.28,0.97,0.54],
+                  mr: [0.46,0.40,0.97,0.66], tc: [0.36,0.20,0.97,0.46],
+                  bs: [0.30,0.79,0.97,0.965] };   /* 下端の帯。たいていの絵で一番おとなしい */
     let best = Infinity;
     for (const [k, r] of Object.entries(box)) {
       let sum = 0, cnt = 0;
@@ -1122,7 +1125,8 @@ function quietSpot(im, id) {
   salCache.set(id, pick);
   return pick;
 }
-const BOXES = { br: [0.50,0.60], tr: [0.50,0.30], mr: [0.46,0.42], tc: [0.36,0.22] };
+const BOXES = { br: [0.50,0.60], tr: [0.50,0.28], mr: [0.46,0.40], tc: [0.36,0.20], bs: [0.30,0.775] };
+const BOXH  = { br: 0.235, tr: 0.235, mr: 0.235, tc: 0.235, bs: 0.185 };
 
 
 /* レベル計の品揃え。飾りである以上、見た目くらいは選べる方がよい。 */
@@ -1308,7 +1312,7 @@ const VD = {
     const spot = ok ? quietSpot(im, al.id) : 'br';
     const bx = BOXES[spot] || BOXES.br;
     const px = ox + u(bx[0]), pw = S0 - u(bx[0]) - u(0.04);
-    const ph = u(0.235), py = oy + u(bx[1]);
+    const ph = u(BOXH[spot] || 0.235), py = oy + u(bx[1]);
     x.fillStyle = 'rgba(226,222,196,.93)';
     x.fillRect(px, py, pw, ph);
     x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
@@ -1341,6 +1345,101 @@ const VD = {
     x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.22})`;
     x.lineWidth = 1.5 + beatE * 2; x.stroke(); x.lineWidth = 1;
   },
+  /* バブル期の据置コンポ。太い段、緑→琥珀→赤、天井が少し留まる。 */
+  bubble(x, w, h) {
+    const pad = Math.min(w, h) * 0.05;
+    const W = w - pad * 2, H = h - pad * 2;
+    x.fillStyle = '#0a0a0c'; x.fillRect(0, 0, w, h);
+    /* ヘアライン仕上げの前面板 */
+    const pn = x.createLinearGradient(0, pad, 0, pad + H);
+    pn.addColorStop(0, '#22242a'); pn.addColorStop(.5, '#171920'); pn.addColorStop(1, '#101217');
+    x.fillStyle = pn; x.fillRect(pad, pad, W, H);
+    for (let y = pad; y < pad + H; y += 3) {
+      x.fillStyle = 'rgba(255,255,255,.015)'; x.fillRect(pad, y, W, 1);
+    }
+    x.strokeStyle = 'rgba(0,0,0,.7)'; x.strokeRect(pad + .5, pad + .5, W - 1, H - 1);
+    const n = 14, rows = 16;
+    const gx = pad + W * 0.06, gw = W * 0.88;
+    const cw = gw / n, cellW = cw * 0.66;
+    const gy = pad + H * 0.14, gh = H * 0.64, ch = gh / rows;
+    for (let i = 0; i < n; i++) {
+      const v = band[Math.floor(i * BANDS / n)];
+      const lit = Math.round(v * rows);
+      const pk = Math.round(peakB[Math.floor(i * BANDS / n)] * rows);
+      for (let r = 0; r < rows; r++) {
+        const on = r < lit, isPk = (r === pk - 1);
+        const f = r / rows;
+        const col = f > 0.82 ? [255, 76, 60] : f > 0.60 ? [255, 176, 58] : [86, 230, 140];
+        x.fillStyle = on ? `rgb(${col[0]},${col[1]},${col[2]})`
+                   : isPk ? `rgba(${col[0]},${col[1]},${col[2]},.55)`
+                          : `rgba(${col[0]},${col[1]},${col[2]},.07)`;
+        const yy = gy + gh - (r + 1) * ch;
+        x.fillRect(gx + i * cw + (cw - cellW) / 2, yy + ch * 0.16, cellW, ch * 0.68);
+        if (on && f > 0.6) {
+          x.shadowColor = x.fillStyle; x.shadowBlur = ch * 0.5;
+          x.fillRect(gx + i * cw + (cw - cellW) / 2, yy + ch * 0.16, cellW, ch * 0.68);
+          x.shadowBlur = 0;
+        }
+      }
+    }
+    /* 目盛りと文字 */
+    x.fillStyle = 'rgba(220,225,235,.55)';
+    x.font = '600 ' + Math.round(H * 0.032) + 'px "Barlow Condensed",-apple-system,sans-serif';
+    const labels = ['63', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
+    labels.forEach((t, k) => {
+      const px = gx + gw * (k / (labels.length - 1));
+      x.fillText(t, px - H * 0.012, gy + gh + H * 0.055);
+    });
+    x.fillStyle = 'rgba(255,176,58,.85)';
+    x.font = '700 ' + Math.round(H * 0.042) + 'px "Barlow Condensed",-apple-system,sans-serif';
+    x.fillText('SPECTRUM ANALYZER', gx, pad + H * 0.10);
+    x.fillStyle = 'rgba(160,170,185,.6)';
+    x.fillText((lvL * 100).toFixed(0).padStart(3, '0') + ' / ' + (lvR * 100).toFixed(0).padStart(3, '0'),
+               gx + gw - H * 0.20, pad + H * 0.10);
+  },
+
+  /* 現場の卓に近い見え方。dB目盛り、天井の保持、細かい帯。 */
+  pro(x, w, h) {
+    x.fillStyle = '#0b0d10'; x.fillRect(0, 0, w, h);
+    const L = w * 0.075, R = w * 0.985, T = h * 0.10, B = h * 0.80;
+    const dbs = [0, -6, -12, -18, -24, -30, -40, -50, -60];
+    x.font = Math.round(h * 0.026) + 'px "Roboto Mono",ui-monospace,monospace';
+    dbs.forEach(db => {
+      const y = T + (B - T) * (db / -60);
+      x.strokeStyle = db === 0 ? 'rgba(255,90,70,.5)' : 'rgba(255,255,255,.10)';
+      x.beginPath(); x.moveTo(L, y + .5); x.lineTo(R, y + .5); x.stroke();
+      x.fillStyle = 'rgba(180,190,205,.75)';
+      x.fillText(String(db), w * 0.012, y + h * 0.010);
+    });
+    const n = BANDS, bw = (R - L) / n;
+    for (let i = 0; i < n; i++) {
+      const v = band[i];
+      const db = v > 0.001 ? Math.max(-60, 20 * Math.log10(v)) : -60;
+      const y = T + (B - T) * (db / -60);
+      const g2 = x.createLinearGradient(0, B, 0, y);
+      g2.addColorStop(0, 'rgba(92,200,255,.35)'); g2.addColorStop(1, 'rgba(92,200,255,.95)');
+      x.fillStyle = g2;
+      x.fillRect(L + i * bw, y, Math.max(1, bw - 1), B - y);
+      const pv = peakB[i];
+      const pdb = pv > 0.001 ? Math.max(-60, 20 * Math.log10(pv)) : -60;
+      const py2 = T + (B - T) * (pdb / -60);
+      x.fillStyle = 'rgba(255,255,255,.85)';
+      x.fillRect(L + i * bw, py2 - 1, Math.max(1, bw - 1), 1.5);
+    }
+    /* 周波数目盛り */
+    x.fillStyle = 'rgba(150,160,175,.7)';
+    ['31','63','125','250','500','1k','2k','4k','8k','16k'].forEach((t, k, arr) => {
+      const px = L + (R - L) * (k / (arr.length - 1));
+      x.fillText(t, px - h * 0.012, B + h * 0.045);
+    });
+    /* 右下に L/R の数値 */
+    const dbv = v => (v > 0.001 ? (20 * Math.log10(v)).toFixed(1) : '-inf');
+    x.font = '500 ' + Math.round(h * 0.034) + 'px "Roboto Mono",ui-monospace,monospace';
+    x.fillStyle = 'rgba(230,235,245,.9)';
+    x.fillText('L ' + dbv(lvL).padStart(6) + ' dB', L, h * 0.945);
+    x.fillText('R ' + dbv(lvR).padStart(6) + ' dB', L + w * 0.30, h * 0.945);
+  },
+
   disc(x, w, h, al) {
     const cx = w/2, cy = h/2, rad = Math.min(w,h)*0.36, im = coverImage(al);
     x.save(); x.translate(cx, cy); x.rotate(spin);
@@ -3261,7 +3360,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v53');
+  L.push('版: v54');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
