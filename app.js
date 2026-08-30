@@ -75,6 +75,7 @@ const S = {
   cell:   LS.get('cell', 'm'),      // ジャケットの大きさ 小・中・大
   deco:   LS.get('deco', true),     // 音が読めないとき、飾りとして動かすか
   meter:  LS.get('meter', 'wave'),  // レベル計の見た目
+  mood:   LS.get('mood', {}),       // { folderid: {bpm, gain, tag, hand:[手で付けた札]} }
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
   relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
@@ -85,6 +86,7 @@ const saveMeta  = () => LS.set('meta', S.meta);
 const saveFav   = () => LS.set('fav', S.fav);
 const savePlays = () => LS.set('plays', S.plays);
 const saveLists = () => LS.set('lists', S.lists);
+const saveMood  = () => LS.set('mood', S.mood);
 const saveHist  = () => LS.set('hist', S.hist.slice(0, 400));
 const isFav = k => !!S.fav[k];
 function toggleFav(k) { if (S.fav[k]) delete S.fav[k]; else S.fav[k] = 1; saveFav(); }
@@ -555,6 +557,11 @@ function nowSheet() {
      [fa ? '★' : '☆', fa ? 'このアルバムの★を外す' : 'このアルバムを★に入れる',
       () => { toggleFav('a' + al.id); renderRoute(); }],
      ['🔀', 'このアルバムをシャッフル', () => startQueue(shuffle(albumRefs(al)), 0)],
+     ['🌙', 'この雰囲気で流す', () => {
+        const q = moodQueue(al);
+        if (!q.length) { toast('先に ⋯ →「雰囲気を測る」を回してください', 4000); return; }
+        startQueue([{ al, i: c.i }].concat(q), 0); go('#/queue');
+      }],
      ['🔁', '繰り返し：' + rep[P.repeat] + ' →',
       () => { P.repeat = { off: 'all', all: 'one', one: 'off' }[P.repeat]; LS.set('repeat', P.repeat);
               toast('繰り返し：' + rep[P.repeat]); }],
@@ -577,6 +584,11 @@ function albumSheet(al) {
           cover: coverOf(al) },
     [['▶', '今すぐ再生', () => play(al, 0)],
      ['🔀', 'シャッフルで再生', () => startQueue(shuffle(albumRefs(al)), 0)],
+     ['🌙', 'この雰囲気で流す', () => {
+        const q = moodQueue(al);
+        if (!q.length) { toast('先に ⋯ →「雰囲気を測る」を回してください', 4000); return; }
+        startQueue([{ al, i: 0 }].concat(q), 0); go('#/queue');
+      }],
      ['⤵', '次に再生', () => enqueueNext(albumRefs(al))],
      ['＋', '列の最後に追加', () => enqueueEnd(albumRefs(al))],
      [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
@@ -2319,6 +2331,7 @@ async function screenLib() {
         <button class="hbtn on" data-tab="lib">棚</button>
         <button class="hbtn" data-tab="artists">アーティスト</button>
         <button class="hbtn" data-tab="genres">ジャンル</button>
+        <button class="hbtn" data-tab="moods">雰囲気</button>
         <span class="sep"></span>
         <select id="sortsel">${Object.keys(SORTS).map(k =>
           `<option value="${k}"${S.sort === k ? ' selected' : ''}>${SORTS[k][0]}</option>`).join('')}</select>
@@ -2352,11 +2365,126 @@ async function screenLib() {
   updateSweepBar();
 }
 
+/* ============ 雰囲気 ============ */
+/* Deezer が曲ごとに BPM と音量を持っている（鍵不要）。
+   それとジャンル・年代から、機械的に雰囲気を決める。
+   手で付けた札があれば、そちらを優先する。 */
+const MOODS = {
+  calm:  ['静か',   'BPM 90 未満・音量控えめ'],
+  warm:  ['落ち着く', 'BPM 90〜105'],
+  easy:  ['心地よい', 'BPM 105〜120'],
+  up:    ['弾む',   'BPM 120〜140'],
+  hot:   ['激しい', 'BPM 140 以上・音量大'],
+};
+function autoMood(m) {
+  if (!m || !m.bpm) return null;
+  const b = m.bpm, g = m.gain == null ? -12 : m.gain;
+  if (b >= 140 || (b >= 128 && g > -9)) return 'hot';
+  if (b >= 120) return 'up';
+  if (b >= 105) return 'easy';
+  if (b >= 90)  return 'warm';
+  return 'calm';
+}
+const moodOf = al => {
+  const m = S.mood[al.id];
+  if (!m) return null;
+  if (m.hand && m.hand.length) return m.hand[0];
+  return m.tag || autoMood(m);
+};
+const moodLabel = k => (MOODS[k] ? MOODS[k][0] : k);
+
+/* Deezer から BPM と音量を拾う。アルバム1枚につき1往復。 */
+async function fetchMood(al) {
+  const q = albumQuery(al);
+  if (!q) return null;
+  const cands = await deezerSearch(q, 3);
+  if (!cands.length) return null;
+  try {
+    const r = await new Promise(res => {
+      const cb = 'mz' + (++jsonpSeq), sc = document.createElement('script');
+      const done = v => { delete window[cb]; sc.remove(); clearTimeout(tm); res(v); };
+      const tm = setTimeout(() => done(null), 7000);
+      window[cb] = j => done(j);
+      sc.onerror = () => done(null);
+      /* 候補の1枚目のアルバムから、代表の曲を1つ取る */
+      sc.src = 'https://api.deezer.com/search/track?output=jsonp&limit=1&callback=' + cb +
+               '&q=' + encodeURIComponent(q);
+      document.body.appendChild(sc);
+    });
+    const t = r && r.data && r.data[0];
+    if (!t || !t.id) return null;
+    const det = await new Promise(res => {
+      const cb = 'mt' + (++jsonpSeq), sc = document.createElement('script');
+      const done = v => { delete window[cb]; sc.remove(); clearTimeout(tm); res(v); };
+      const tm = setTimeout(() => done(null), 7000);
+      window[cb] = j => done(j);
+      sc.onerror = () => done(null);
+      sc.src = 'https://api.deezer.com/track/' + t.id + '?output=jsonp&callback=' + cb;
+      document.body.appendChild(sc);
+    });
+    if (!det || !det.bpm) return null;
+    return { bpm: det.bpm, gain: det.gain, tag: null };
+  } catch (e) { return null; }
+}
+
+async function sweepMood() {
+  if (S.sweep) { S.sweep.stop = true; return; }
+  const targets = S.albums.filter(al => !S.mood[al.id]);
+  if (!targets.length) { toast('全部そろっています'); return; }
+  S.sweep = { done: 0, total: targets.length, hit: 0, iffy: 0, stop: false, t0: Date.now(), note: '' };
+  go('#/lib');
+  for (const al of targets) {
+    if (S.sweep.stop) break;
+    S.sweep.note = '雰囲気を測っています：' + al.name.slice(0, 18);
+    const m = await fetchMood(al);
+    if (m) { S.mood[al.id] = m; S.sweep.hit++; }
+    S.sweep.done++;
+    if (S.sweep.done % 10 === 0) { saveMood(); updateSweepBar(); }
+  }
+  const r = S.sweep; S.sweep = null; saveMood();
+  toast(`${r.hit} / ${r.total} 枚に雰囲気を付けました`, 3500);
+  renderRoute();
+}
+
+/* 「この雰囲気で流す」。いま鳴っているものに近いものを次々つなぐ。 */
+function moodQueue(seed, n = 60) {
+  const m0 = S.mood[seed.id] || {};
+  const k0 = moodOf(seed);
+  const g0 = albumGenre(seed);
+  const b0 = m0.bpm || 0;
+  const scored = S.albums.filter(al => al.id !== seed.id).map(al => {
+    const m = S.mood[al.id] || {};
+    let sc = 0;
+    if (k0 && moodOf(al) === k0) sc += 3;
+    if (g0 && albumGenre(al) === g0) sc += 2;
+    if (b0 && m.bpm) sc += Math.max(0, 1.6 - Math.abs(m.bpm - b0) / 22);
+    if (isFav('a' + al.id)) sc += 0.4;
+    return { al, sc: sc + Math.random() * 0.5 };
+  }).filter(x => x.sc > 1.2).sort((a, b) => b.sc - a.sc);
+  const out = [], seen = new Set();
+  let lastArtist = null;
+  for (const x of scored) {
+    if (out.length >= n) break;
+    const a2 = x.al.artist || x.al.name;
+    if (a2 === lastArtist) continue;
+    if (seen.has(x.al.id)) continue;
+    seen.add(x.al.id); lastArtist = a2;
+    const t = x.al.tracks[Math.floor(Math.random() * x.al.tracks.length)];
+    out.push({ al: x.al, i: x.al.tracks.indexOf(t) });
+  }
+  return out;
+}
+
 /* 掘る。1535枚を上から眺めるのは無理なので、まとまりから入る。 */
+function keyOf(kind, al) {
+  return kind === 'artist' ? cleanName(al.artist)
+       : kind === 'genre'  ? albumGenre(al)
+                           : moodLabel(moodOf(al) || '');
+}
 function groupsOf(kind) {
   const m = new Map();
   for (const al of S.albums) {
-    const k = kind === 'artist' ? cleanName(al.artist) : albumGenre(al);
+    const k = keyOf(kind, al);
     if (!k) continue;
     const g = m.get(k) || { n: 0, al: null, tracks: 0 };
     g.n++; g.tracks += al.tracks.length;
@@ -2367,20 +2495,21 @@ function groupsOf(kind) {
 }
 function screenBrowse(kind) {
   $('#hdr').classList.remove('hide'); $('#back').classList.add('hide');
-  $('#title').textContent = kind === 'artist' ? 'アーティスト' : 'ジャンル';
+  $('#title').textContent = { artist: 'アーティスト', genre: 'ジャンル', mood: '雰囲気' }[kind];
   $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.remove('hide');
   $('#btnMenu').classList.remove('hide');
   const gs = groupsOf(kind);
-  const none = S.albums.filter(al => !(kind === 'artist' ? cleanName(al.artist) : albumGenre(al))).length;
+  const none = S.albums.filter(al => !keyOf(kind, al)).length;
   main().innerHTML = `<div class="libbar">
       <div class="row1">
         <button class="hbtn ${kind === 'artist' ? '' : ''}" data-tab="lib">棚</button>
         <button class="hbtn ${kind === 'artist' ? 'on' : ''}" data-tab="artists">アーティスト</button>
         <button class="hbtn ${kind === 'genre' ? 'on' : ''}" data-tab="genres">ジャンル</button>
+        <button class="hbtn ${kind === 'mood' ? 'on' : ''}" data-tab="moods">雰囲気</button>
         <span class="sep"></span>
         <span style="color:var(--dim);font-size:12px">${gs.length} 組</span>
       </div>
-      <div class="srch"><input id="bq" placeholder="${kind === 'artist' ? 'アーティストを絞る' : 'ジャンルを絞る'}"
+      <div class="srch"><input id="bq" placeholder="${{artist:'アーティストを絞る',genre:'ジャンルを絞る',mood:'雰囲気を絞る'}[kind]}"
         autocapitalize="off"></div></div>
     <div id="blist"></div>
     ${kind === 'genre' && none ? `<div class="note" style="padding:12px 2px 0">
@@ -2406,8 +2535,7 @@ function screenBy(kind, key) {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = key;
   $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.remove('hide');
-  const list = S.albums.filter(al =>
-    (kind === 'artist' ? cleanName(al.artist) : albumGenre(al)) === key)
+  const list = S.albums.filter(al => keyOf(kind, al) === key)
     .sort((SORTS[S.sort] || SORTS.artist)[1]);
   main().innerHTML = `<div class="libbar"><div class="row1">
       <button class="hbtn" id="pall2">▶ 通して聴く</button>
@@ -2417,7 +2545,7 @@ function screenBy(kind, key) {
   wireGrid();
   $('#pall2').onclick = () => startQueue(list.flatMap(albumRefs), 0);
   $('#shuf2').onclick = () => startQueue(shuffle(list.flatMap(albumRefs)), 0);
-  $('#back').onclick  = () => go(kind === 'artist' ? '#/artists' : '#/genres');
+  $('#back').onclick  = () => go({ artist: '#/artists', genre: '#/genres', mood: '#/moods' }[kind]);
 }
 
 function screenAlbum(id) {
@@ -2899,6 +3027,7 @@ function screenMenu() {
       ${GATE ? `<button class="row" id="leave"><span class="nm">この端末を外す</span><span class="sub">合言葉を入れ直すまで</span></button>` : `<button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>`}
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
+      <button class="row" id="moodgo"><span class="nm">雰囲気を測る</span><span class="sub">${Object.keys(S.mood).length} 枚</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
       <button class="row" id="car"><span class="nm">車モード</span><span class="sub">大きな的で操作する</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
@@ -2927,6 +3056,7 @@ function screenMenu() {
   const cd2 = $('#code'); if (cd2) cd2.onclick = () => go('#/code');
   $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
+  $('#moodgo').onclick = () => sweepMood();
   $('#meta').onclick  = () => sweepMeta();
   $('#car').onclick   = () => go('#/car');
   $('#lists').onclick = () => go('#/lists');
@@ -2982,6 +3112,8 @@ function routeTo() {
   if (h === '#/search')          return screenSearch();
   if (h === '#/artists')         return screenBrowse('artist');
   if (h === '#/genres')          return screenBrowse('genre');
+  if (h === '#/moods')           return screenBrowse('mood');
+  if (h.startsWith('#/by/mood/'))   return screenBy('mood',   decodeURIComponent(h.slice(10)));
   if (h.startsWith('#/by/artist/')) return screenBy('artist', decodeURIComponent(h.slice(12)));
   if (h.startsWith('#/by/genre/'))  return screenBy('genre',  decodeURIComponent(h.slice(11)));
   if (h === '#/car')             return screenCar();
@@ -3370,7 +3502,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v55');
+  L.push('版: v56');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
