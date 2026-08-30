@@ -1194,7 +1194,7 @@ function screenNow() {
         <button class="qi" data-nq="${P.qi + 1 + k}">
           ${coverOf(r.al) ? `<img loading="lazy" src="${esc(coverOf(r.al))}">` : '<img alt="">'}
           <span class="qt"><span class="q1">${esc(trackTitle(r.al.tracks[r.i]))}</span>
-            <span class="q2">${esc(r.al.artist)}</span></span>
+            <span class="q2">${esc(r.al.name)}${r.al.artist ? ' · ' + esc(r.al.artist) : ''}</span></span>
         </button>`).join('') || '<div class="qe">この曲でおしまいです</div>');
     q.querySelectorAll('[data-nq]').forEach(b => b.onclick = () => { playAt(+b.dataset.nq); });
   };
@@ -2780,7 +2780,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v44');
+  L.push('版: v45');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
