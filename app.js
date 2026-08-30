@@ -322,10 +322,15 @@ function deezerSearch(term, limit = 8) {
 const GENRE_WORDS = new Set(['洋楽','邦楽','サントラ','サウンドトラック','ost','クラシック','ジャズ','jazz','ロック','rock',
   'ポップス','pop','アニメ','非音楽','音楽','music','その他','未整理','アルバム','albums','マイミュージック',
   'various','va','compilation','オムニバス','ベスト','best']);
-const cleanName = s => String(s || '')
-  .replace(/^[★☆♪●○▶\d\s._-]+/, '')
-  .replace(/[\[\(【（][^\]\)】）]*[\]\)】）]/g, ' ')      // (Disc 1) [FLAC] は邪魔
-  .replace(/\s+/g, ' ').trim();
+const cleanName = s => {
+  const raw = String(s || '');
+  const out = raw
+    .replace(/^[★☆♪●○▶\d\s._-]+/, '')
+    .replace(/[\[\(【（][^\]\)】）]*[\]\)】）]/g, ' ')      // (Disc 1) [FLAC] は邪魔
+    .replace(/\s+/g, ' ').trim();
+  /* 「21」のように数字だけの題を丸ごと消していた。消えるくらいなら元のまま。 */
+  return out || raw.trim();
+};
 
 /* フォルダ名は「アーティスト - アルバム」の形が多い。分けずに丸ごと照合すると、
    同じ言葉を含むトリビュート盤を掴む（実測で踏んだ）。 */
