@@ -953,7 +953,7 @@ const VD = {
     x.shadowBlur = 0; x.shadowOffsetY = 0;
 
     /* ④ 盤 */
-    const dr = u(0.30), cx = ox + u(0.29), cy = oy + u(0.52);
+    const dr = u(0.315), cx = ox + u(0.245), cy = oy + u(0.755);
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
@@ -973,13 +973,15 @@ const VD = {
     /* 盤面の円周に曲名を刷る（実物の曲目表示に相当） */
     const ring = trackTitle(tk).toUpperCase().slice(0, 46);
     x.save(); x.font = '600 ' + u(0.026) + 'px "Hiragino Sans",-apple-system,sans-serif';
-    x.fillStyle = 'rgba(255,255,255,.80)'; x.textAlign = 'center';
+    x.fillStyle = 'rgba(255,255,255,.82)'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    /* 文字は接線に沿わせる。余計に半回転させると裏返って読めなくなる。 */
+    const step = Math.min(0.115, (Math.PI * 1.5) / Math.max(1, ring.length));
+    const start = -((ring.length - 1) * step) / 2;
     for (let i = 0; i < ring.length; i++) {
-      const ang = -Math.PI * 0.86 + (i / Math.max(1, ring.length - 1)) * Math.PI * 1.28;
-      x.save(); x.rotate(ang); x.translate(0, -dr * 0.80); x.rotate(Math.PI);
+      x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.80);
       x.fillText(ring[i], 0, 0); x.restore();
     }
-    x.textAlign = 'left'; x.restore();
+    x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.restore();
     x.strokeStyle = 'rgba(255,255,255,.09)'; x.lineWidth = 1;
     for (let i = 1; i <= 8; i++) { x.beginPath(); x.arc(0, 0, dr * (0.36 + i * 0.075), 0, 7); x.stroke(); }
     x.beginPath(); x.arc(0, 0, dr * 0.235, 0, 7);
@@ -1020,8 +1022,9 @@ const VD = {
     x.fillText(cleanName(al.name), px + u(0.03), py + u(0.198));
 
     /* ⑥ 左下の L／R */
-    const mx = ox + u(0.06), my = oy + u(0.855), rowH = u(0.052);
     const n = 24, gap = u(0.0135), bw = Math.max(1.5, u(0.0062));
+    const mw = u(0.05) + n * gap;
+    const mx = ox + S0 - u(0.055) - mw, my = oy + u(0.845), rowH = u(0.052);
     x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
     [['L', lvL], ['R', lvR]].forEach((row, ri) => {
       const y = my + ri * rowH;
@@ -2766,7 +2769,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v42');
+  L.push('版: v43');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
