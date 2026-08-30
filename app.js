@@ -591,8 +591,7 @@ function nowSheet() {
      ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
      ['🎞', 'ビジュアライザーを選ぶ', () => go('#/vis')],
      ['🚗', '車モード（大きく表示）', () => go('#/car')],
-     [albumOffline(al) ? '🗑' : '↓', albumOffline(al) ? 'このアルバムを端末から消す' : 'このアルバムを端末に入れる',
-      () => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al))]]);
+     ]);
 }
 
 function albumSheet(al) {
@@ -612,8 +611,7 @@ function albumSheet(al) {
       () => { toggleFav('a' + al.id); renderRoute(); }],
      ['💿', 'アルバムを開く', () => go('#/album/' + al.id)],
      ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
-     [albumOffline(al) ? '🗑' : '↓', albumOffline(al) ? '端末から消す' : '端末に入れる',
-      () => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al))]]);
+     ]);
 }
 function trackSheet(al, i) {
   const t = al.tracks[i], fav = isFav('t' + t.id);
@@ -2159,7 +2157,11 @@ function screenVis() {
   $('#back').onclick = () => go(cur() ? '#/now' : '#/lib');
 }
 
-/* ============ オフライン保存 ============ */
+/* ============ オフライン保存（今は使えない） ============ */
+/* pCloud は端末に中身を読ませない（CORS の許しを出さない）。読めない返事は
+   箱に入れても取り出せないので、端末に貯める道は塞がっている。
+   入口ごしに読める道は pCloud に断られることがあり、当てにできない。
+   仕掛けだけ残して、入口は外した。通る道が見つかれば戻す。 */
 /* 直リンクが CORS を返さない場合に備え、api 経由の読み出しに落ちる道を用意する。 */
 const MIME = { mp3:'audio/mpeg', m4a:'audio/mp4', m4b:'audio/mp4', aac:'audio/aac',
                flac:'audio/flac', wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg',
@@ -2670,7 +2672,6 @@ const FILTERS = {
   all:    ['すべて',        () => true],
   fav:    ['★',            al => isFav('a' + al.id)],
   recent: ['最近聴いた',    al => lastPlayed(al) > 0],
-  off:    ['端末',          al => albumOffline(al)],
   iffy:   ['要確認',        al => { const c = S.covers[al.id]; return c && !c.manual && c.sure === false; }],
   none:   ['ジャケット無し', al => !coverOf(al)],
 };
@@ -2704,7 +2705,7 @@ function gridOf(list) {
     const cv = coverOf(al), c = S.covers[al.id];
     const badge = c && !c.manual && c.sure === false
                 ? `<button class="badge auto" data-fix="${al.id}">要確認 ›</button>`
-                : albumOffline(al) ? '<span class="badge off">端末</span>' : '';
+                : '';
     const star = isFav('a' + al.id) ? '<span class="badge star">★</span>' : '';
     const y = albumYear(al);
     return `<div class="al" data-open="${al.id}" role="button" tabindex="0">
@@ -2762,7 +2763,7 @@ async function screenLib() {
       <span id="swtxt"></span><button class="hbtn" id="swstop">やめる</button></div>` : '';
   const counts = {};
   for (const k of Object.keys(FILTERS)) counts[k] = S.albums.filter(FILTERS[k][1]).length;
-  const labels = { all: 'すべて', fav: '★', recent: '最近聴いた', off: '端末',
+  const labels = { all: 'すべて', fav: '★', recent: '最近聴いた',
                    iffy: '要確認', none: 'ジャケット無し' };
   const gl = genreList();
   const shown = shownAlbums();
@@ -3072,7 +3073,12 @@ function screenBrowse(kind) {
                         : `<img alt="" style="${madeCover(g.al)}">`}
         <span class="t2"><span class="n2">${esc(k)}</span>
           <span class="a2">${g.n} アルバム · ${g.tracks} 曲</span></span>
-      </button>`).join('') || '<div class="empty">見つかりません</div>';
+      </button>`).join('') ||
+      (kind === 'mood' && !gs.length
+        ? `<div class="empty">まだ測っていません。<br><br>
+             ⋯ →「雰囲気を測る」を一度回すと、アルバムごとの雰囲気が付きます。<br>
+             曲ごとの雰囲気は上の札から選べます（集まり次第増えます）。</div>`
+        : '<div class="empty">見つかりません</div>');
     $('#blist').querySelectorAll('[data-g]').forEach(b => b.onclick = () =>
       go('#/by/' + kind + '/' + encodeURIComponent(b.dataset.g)));
   };
@@ -3139,7 +3145,7 @@ function screenAlbum(id) {
           <button class="hbtn" id="qnext">次に再生</button>
           <button class="hbtn" id="qend">列に足す</button>
           <button class="hbtn" id="cov">ジャケット</button>
-          <button class="hbtn" id="dl">${albumOffline(al) ? '端末から消す' : '端末に入れる'}</button>
+
         </div>
       </div>
     </div>
@@ -3161,7 +3167,6 @@ function screenAlbum(id) {
   $('#qend').onclick  = () => enqueueEnd(albumRefs(al));
   $('#fav').onclick   = () => { toggleFav('a' + al.id); screenAlbum(id); };
   $('#cov').onclick   = () => go('#/cover/' + al.id);
-  $('#dl').onclick    = e => (albumOffline(al) ? removeAlbum(al) : downloadAlbum(al, e.currentTarget));
   $('#back').onclick  = () => go('#/lib');
 }
 
@@ -3234,7 +3239,6 @@ function screenSmart() {
       ${row('fav', '★ を付けたものだけ')}
       ${row('unheard', 'まだ聴いていないもの', '買ったまま忘れている盤が出てきます')}
       ${row('stale', '30日以上開いていないもの', '棚を死蔵させないための条件')}
-      ${row('off', '端末に入れてあるものだけ', '圏外用。通信を当てにしません')}
       ${row('spread', '同じアーティストを続けない')}
     </div>
     <div class="tools" style="margin-top:14px">
@@ -3269,7 +3273,6 @@ function buildSmart() {
     if (SMART.fav && !isFav('a' + al.id)) return false;
     if (SMART.unheard && playCount(al) > 0) return false;
     if (SMART.stale && lastPlayed(al) > now - MONTH) return false;
-    if (SMART.off && !albumOffline(al)) return false;
     if (SMART.g && albumGenre(al) !== SMART.g) return false;
     if (SMART.d) { const y = +albumYear(al); if (!y || y < +SMART.d || y >= +SMART.d + 10) return false; }
     return true;
@@ -4075,7 +4078,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v74');
+  L.push('版: v75');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
