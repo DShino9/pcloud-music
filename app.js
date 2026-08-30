@@ -1438,11 +1438,12 @@ const VD = {
     if (ok) { const z = dr * 4; x.globalAlpha = 0.16; x.drawImage(im, -z, -z, z * 2, z * 2); x.globalAlpha = 1; }
     /* 記録面は鏡。写るのは周りの景色なので、上は暗く、下は明るい。 */
     const base = x.createLinearGradient(0, -dr, 0, dr);
-    base.addColorStop(0,   'rgba(26,29,36,.97)');
-    base.addColorStop(.34, 'rgba(46,51,61,.96)');
-    base.addColorStop(.52, 'rgba(104,112,126,.95)');
-    base.addColorStop(.70, 'rgba(58,64,76,.96)');
-    base.addColorStop(1,   'rgba(22,25,31,.97)');
+    base.addColorStop(0,   'rgba(14,16,20,.98)');
+    base.addColorStop(.30, 'rgba(28,32,40,.97)');
+    base.addColorStop(.48, 'rgba(78,86,100,.96)');
+    base.addColorStop(.58, 'rgba(46,52,63,.97)');
+    base.addColorStop(.80, 'rgba(20,23,29,.98)');
+    base.addColorStop(1,   'rgba(10,12,15,.98)');
     x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
 
     /* 虹の正体は回折。見る角度を止めれば、色は「半径」に沿って変わる。
@@ -1457,12 +1458,12 @@ const VD = {
       }
       x.save();
       x.globalCompositeOperation = 'screen';
-      x.globalAlpha = 0.92;
+      x.globalAlpha = 0.72;
       x.fillStyle = rg; x.fillRect(-dr, -dr, dr * 2, dr * 2);
       x.globalAlpha = 1;
       /* 光の当たる向きは盤が回っても動かない。窓だけは回さない。 */
       const win = x.createConicGradient(-spin + 2.15, 0, 0);
-      const keep = [0.00, 0.50], wid = 0.085;
+      const keep = [0.00, 0.50], wid = 0.045;
       for (let i = 0; i <= 72; i++) {
         const t = i / 72;
         let near = 1;
@@ -1493,7 +1494,7 @@ const VD = {
     x.save(); x.beginPath(); x.arc(0, 0, dr, 0, 7); x.clip();
     for (let i = 0; i < 110; i++) {
       const rr2 = dr * (0.195 + i * 0.0072);
-      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.045)' : 'rgba(0,0,0,.06)';
+      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.09)';
       x.lineWidth = 1;
       x.beginPath(); x.arc(0, 0, rr2, 0, 7); x.stroke();
     }
@@ -1505,13 +1506,13 @@ const VD = {
     const sp1 = x.createLinearGradient(-dr, -dr, dr * 0.5, dr);
     sp1.addColorStop(0,   'rgba(255,255,255,0)');
     sp1.addColorStop(.40, 'rgba(255,255,255,.06)');
-    sp1.addColorStop(.50, 'rgba(255,255,255,.46)');
+    sp1.addColorStop(.50, 'rgba(255,255,255,.30)');
     sp1.addColorStop(.56, 'rgba(255,255,255,.10)');
     sp1.addColorStop(1,   'rgba(255,255,255,0)');
     x.fillStyle = sp1; x.fillRect(-dr, -dr, dr * 2, dr * 2);
     const sp2 = x.createLinearGradient(dr, -dr, -dr * 0.6, dr);
     sp2.addColorStop(0,   'rgba(255,255,255,0)');
-    sp2.addColorStop(.48, 'rgba(255,255,255,.20)');
+    sp2.addColorStop(.48, 'rgba(255,255,255,.12)');
     sp2.addColorStop(.54, 'rgba(255,255,255,0)');
     x.fillStyle = sp2; x.fillRect(-dr, -dr, dr * 2, dr * 2);
     x.restore();
@@ -3811,7 +3812,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v67');
+  L.push('版: v68');
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
