@@ -707,7 +707,8 @@ async function playAt(qi) {
     const so = await trackSource(t);
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
-    au.crossOrigin = (V.ok && !so.local && so.cors === true) ? 'anonymous' : null;
+    /* 出力から拾っているときは印を付けてはいけない。付けると次の曲が読めなくなる。 */
+    au.crossOrigin = (V.ok && !V.tap && !so.local && so.cors === true) ? 'anonymous' : null;
     if (so.relay) {
       /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
          通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
@@ -995,6 +996,8 @@ function hasSignal(ms = 1200) {
 }
 async function tapElement() {
   if (V.ok) return true;
+  if (V.tapTried) return false;      /* 一度駄目なら毎回試さない */
+  V.tapTried = true;
   const grab = au.captureStream ? au.captureStream.bind(au)
              : (au.mozCaptureStream ? au.mozCaptureStream.bind(au) : null);
   if (!grab) return false;
@@ -1715,6 +1718,7 @@ function screenNow() {
   /* 解析はここで初めて繋ぐ。読めない音を通すと無音になるので、確かめてから。 */
   (async () => {
     const cc = cur(); if (!cc) return;
+    showTapState();
     if (V.ok) return;                       /* すでに繋がっている */
     const src = au.currentSrc || au.src || '';
     const own = src.startsWith('blob:') || src.startsWith(location.origin);
@@ -1724,16 +1728,7 @@ function screenNow() {
     if (!own && await tapElement()) { paint(); return; }
     if (!own && !(await tryCors()) && !(await bufferHere(cc))) {
       $('#nmsg').className = 'msg';
-      $('#nmsg').innerHTML = '本物の波形を出すには、鳴っている音を拾う許可が要ります。' +
-        ' <button class="hbtn" id="ntap" style="padding:5px 10px;font-size:12px">この音を拾う</button>' +
-        '<br><span style="font-size:11.5px">押すと共有の窓が出ます。<b>このタブ</b>を選び、' +
-        '<b>「タブの音声も共有」に印</b>を付けてください。映像は使いません。</span>';
-      const nt = $('#ntap');
-      if (nt) nt.onclick = async () => {
-        nt.textContent = '拾っています…';
-        if (await tapTab()) { $('#nmsg').textContent = '本物の波形が出ています'; }
-        else { nt.textContent = 'もう一度試す'; }
-      };
+      showTapState();
       note('解析しない（読めない音）');
       return;
     }
@@ -1744,6 +1739,26 @@ function screenNow() {
       $('#nmsg').textContent = '解析器を作れませんでした。回転ジャケットなら動きます';
     }
   })();
+}
+
+/* いま本物か飾りかを、常に見せる。切り替えもここから。 */
+function showTapState() {
+  const el = $('#nmsg'); if (!el) return;
+  if (V.ok) {
+    el.innerHTML = '<b>本物の波形</b>（' +
+      (V.tap === 'tab' ? 'タブの音から' : V.tap === 'element' ? '再生の出力から' : '音そのものから') + '）';
+    return;
+  }
+  el.innerHTML = (S.deco ? '<b>飾り</b>で動かしています。' : '止まっています。') +
+    ' <button class="hbtn" id="ntap" style="padding:5px 10px;font-size:12px">本物の波形にする</button>' +
+    '<br><span style="font-size:11.5px">押すと共有の窓が出ます。<b>このタブ</b>を選び、' +
+    '<b>「タブの音声も共有」に印</b>を付けてください。映像は使いません。一度で以後ずっと効きます。</span>';
+  const nt = $('#ntap');
+  if (nt) nt.onclick = async () => {
+    nt.textContent = '拾っています…';
+    if (await tapElement() || await tapTab()) { showTapState(); toast('本物の波形になりました', 3000); }
+    else { nt.textContent = 'もう一度試す'; }
+  };
 }
 
 function screenVis() {
@@ -1765,11 +1780,25 @@ function screenVis() {
         <span class="chk ${S.deco ? 'on' : ''}">${S.deco ? '✓' : ''}</span>
       </button>
     </div>
+    <div class="rowlist" style="margin-top:14px">
+      <button class="row" id="tapgo">
+        <span class="nm">${V.ok ? '本物の波形で動いています' : '本物の波形にする'}<br>
+          <span class="sub">${V.ok
+            ? '鳴っている音から拾えています。'
+            : 'pCloud から直に流している音は中身を読めないので、鳴っている出力から拾います。押すと共有の窓が出るので「このタブ」を選び「タブの音声も共有」に印を付けてください。'}</span></span>
+        <span class="chk ${V.ok ? 'on' : ''}">${V.ok ? '✓' : ''}</span>
+      </button>
+    </div>
     <div class="sect" style="margin-top:18px">レベル計の見た目</div>
     <div class="rowlist">${Object.entries(METERS).map(([k, n]) => `
       <button class="row" data-m="${k}"><span class="nm">${n}</span>
         <span class="chk ${S.meter === k ? 'on' : ''}">${S.meter === k ? '✓' : ''}</span></button>`).join('')}</div>
     <div class="note" style="padding:12px 2px 0">選んだものを、再生画面で触るたびに順に切り替えます。</div>`;
+  $('#tapgo').onclick = async () => {
+    if (V.ok) { toast('すでに本物です'); return; }
+    if (await tapElement() || await tapTab()) { toast('本物の波形になりました', 3000); }
+    screenVis();
+  };
   $('#deco').onclick = () => { S.deco = !S.deco; LS.set('deco', S.deco); screenVis(); };
   main().querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
     S.meter = b.dataset.m; LS.set('meter', S.meter); screenVis();
@@ -3573,7 +3602,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v60');
+  L.push('版: v61');
+  L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
