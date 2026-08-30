@@ -31,7 +31,7 @@ export default {
     const url = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (url.pathname === '/' || url.pathname === '') {
-      return new Response('音楽棚の中継所です', {
+      return new Response('棚の中継所です（音楽棚・ゲーム棚 共用）', {
         headers: { ...CORS, 'content-type': 'text/plain; charset=utf-8' } });
     }
     if (url.pathname !== '/audio' && url.pathname !== '/link') {
@@ -120,9 +120,23 @@ export default {
 };
 
 const hostOf = u => { try { return new URL(u).hostname.split('.')[0]; } catch (e) { return '?'; } };
+/* 音は <audio> に渡すので種類を正しく言う必要がある。
+   ROM とディスクは中身をプログラムが受け取るだけなので、素のバイト列でよい。
+   知らない拡張子は audio/mpeg のままにしておく（音楽棚の今までの振る舞いを変えない）。 */
 const TYPES = { mp3:'audio/mpeg', m4a:'audio/mp4', m4b:'audio/mp4', mp4:'audio/mp4',
                 aac:'audio/aac', flac:'audio/flac', wav:'audio/wav', ogg:'audio/ogg',
-                opus:'audio/ogg', aif:'audio/aiff', aiff:'audio/aiff', wma:'audio/x-ms-wma' };
+                opus:'audio/ogg', aif:'audio/aiff', aiff:'audio/aiff', wma:'audio/x-ms-wma',
+                nes:'application/octet-stream', smc:'application/octet-stream',
+                sfc:'application/octet-stream', fig:'application/octet-stream',
+                n64:'application/octet-stream', v64:'application/octet-stream',
+                z64:'application/octet-stream', nds:'application/octet-stream',
+                iso:'application/octet-stream', cso:'application/octet-stream',
+                fdi:'application/octet-stream', fdd:'application/octet-stream',
+                d88:'application/octet-stream', d98:'application/octet-stream',
+                hdi:'application/octet-stream', thd:'application/octet-stream',
+                nhd:'application/octet-stream', hdm:'application/octet-stream',
+                xdf:'application/octet-stream', hdd:'application/octet-stream',
+                rom:'application/octet-stream', bmp:'application/octet-stream' };
 function typeOf(u) {
   let name = u;
   try { name = decodeURIComponent(new URL(u).pathname); } catch (e) {}

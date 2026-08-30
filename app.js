@@ -625,6 +625,21 @@ function addToList(refs, label) {
   sheet({ name: 'プレイリストに入れる', sub: refs.length + ' 曲', cover: coverOf(refs[0].al) }, items);
 }
 
+/* 雰囲気を手で決める。自動が外したときに直せないと使い物にならない。 */
+function moodSheet(al) {
+  const now = moodOf(al);
+  const items = TAGS.map(t => [t === now ? '●' : '○', t + (t === now ? '（いま）' : ''), () => {
+    S.mood[al.id] = Object.assign({}, S.mood[al.id], { hand: [t] });
+    saveMood(); atmCache.clear(); toast('雰囲気を「' + t + '」にしました', 2500); renderRoute();
+  }]);
+  items.push(['×', '手で決めたのをやめる（自動に戻す）', () => {
+    if (S.mood[al.id]) { delete S.mood[al.id].hand; saveMood(); }
+    atmCache.clear(); toast('自動に戻しました', 2000); renderRoute();
+  }]);
+  sheet({ name: '雰囲気を決める', sub: cleanName(al.name) + (now ? '（いま: ' + now + '）' : ''),
+          cover: coverOf(al) }, items);
+}
+
 function albumSheet(al) {
   const fav = isFav('a' + al.id);
   sheet({ name: al.name, sub: [al.artist, albumGenre(al), albumYear(al)].filter(Boolean).join(' · '),
@@ -645,6 +660,7 @@ function albumSheet(al) {
      albumGenre(al) ? ['🏷', 'ジャンル「' + albumGenre(al) + '」を見る',
        () => go('#/by/genre/' + encodeURIComponent(albumGenre(al)))] : null,
      ['≡', 'プレイリストに入れる', () => addToList(albumRefs(al), cleanName(al.name))],
+     ['🌙', '雰囲気を手で決める', () => moodSheet(al)],
      ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
      ]);
 }
@@ -4334,7 +4350,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v109');
+  L.push('版: v110');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
