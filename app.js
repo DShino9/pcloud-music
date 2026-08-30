@@ -1365,11 +1365,33 @@ function importIndex(file, done) {
 /* ハッシュが同じだと hashchange が飛ばない。
    #/pick/0 が付いたまま開き直してログインすると、成功しても画面が変わらず
    「つないでいます…」のまま固まる（実際に踏んだ）。同じときは自分で描き直す。 */
+/* 画面ごとに見ていた位置を覚える。1535枚の棚で毎回頭に戻されるのは苦行。 */
+const scrollMem = Object.create(null);
+try { history.scrollRestoration = 'manual'; } catch (e) {}
+const hashNow = () => location.hash || '#/lib';
+function keepScroll() { scrollMem[hashNow()] = window.scrollY || 0; }
+function restoreScroll(h) {
+  const y = scrollMem[h] || 0;
+  /* 絵が後から入って高さが変わるので、何度か置き直す。 */
+  const put = () => window.scrollTo(0, y);
+  put();
+  requestAnimationFrame(put);
+  setTimeout(put, 80);
+  setTimeout(put, 300);
+}
 function go(hash) {
+  keepScroll();
   if (location.hash === hash) renderRoute();
   else location.hash = hash;
 }
-window.addEventListener('hashchange', renderRoute);
+let lastHash = hashNow();
+window.addEventListener('hashchange', () => {
+  scrollMem[lastHash] = scrollMem[lastHash] || 0;
+  lastHash = hashNow();
+  renderRoute();
+});
+/* 直接ハッシュを書き換えられたときのために、離れる直前も控える */
+window.addEventListener('beforeunload', keepScroll);
 
 /* pCloud が返す番号を、こちらの言葉に置き換える。分からない番号はそのまま見せる。 */
 function loginHint(e) {
@@ -1553,9 +1575,18 @@ async function screenLib() {
   }).join('')}</div>` + (shown.length ? '' :
     `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
 
-  main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => { S.filter = b.dataset.f; LS.set('filter', S.filter); screenLib(); });
-  $('#sortsel').onchange = e => { S.sort = e.target.value; LS.set('sort', S.sort); screenLib(); };
-  $('#gensel').onchange  = e => { S.genre = e.target.value; LS.set('genre', S.genre); screenLib(); };
+  main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
+    S.filter = b.dataset.f; LS.set('filter', S.filter);
+    scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
+  });
+  $('#sortsel').onchange = e => {
+    S.sort = e.target.value; LS.set('sort', S.sort);
+    scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
+  };
+  $('#gensel').onchange  = e => {
+    S.genre = e.target.value; LS.set('genre', S.genre);
+    scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
+  };
   $('#shufAll').onclick  = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
   $('#smart').onclick    = () => go('#/smart');
   const byId = id => S.albums.find(a => String(a.id) === String(id));
@@ -2023,6 +2054,12 @@ function screenMenu() {
 }
 
 function renderRoute() {
+  const h = hashNow();
+  const out = routeTo();
+  Promise.resolve(out).then(() => restoreScroll(h)).catch(() => {});
+  return out;
+}
+function routeTo() {
   const h = location.hash || '';
   if (!GATE && !S.auth && !S.code) {
     if (h && h !== '#/login') {
@@ -2419,7 +2456,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v34');
+  L.push('版: v35');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
