@@ -121,10 +121,22 @@ export default {
 
     if (url.pathname === '/login' && req.method === 'POST') {
       const f = fails.get(ip);
-      if (f && f.until > Date.now()) return j({ error: 'しばらく待ってください' }, 429);
+      if (f && f.until > Date.now() && env.SETUP !== '1') {
+        return j({ error: 'しばらく待ってください' }, 429);
+      }
       let pass = '';
       try { pass = (await req.json()).pass || ''; } catch (e) {}
-      if (!env.PASS || !same(pass, env.PASS)) {
+      /* 前後の空白は打ち間違いの元。両方から落としてから比べる。 */
+      pass = String(pass).trim();
+      const want = String(env.PASS || '').trim();
+      if (!want) {
+        return j({ error: 'PASS が設定されていません（Cloudflare の変数を確認してください）' }, 500);
+      }
+      if (!same(pass, want)) {
+        /* 設置中だけ、食い違いの手がかりを出す。SETUP は済んだら消すこと。 */
+        if (env.SETUP === '1') {
+          return j({ error: `合いません（打った字 ${pass.length} 文字 / 設定は ${want.length} 文字）` }, 401);
+        }
         const n = (f && f.until > Date.now() ? f.n : 0) + 1;
         fails.set(ip, { n, until: n >= FAIL_MAX ? Date.now() + FAIL_WINDOW : 0 });
         await new Promise(r => setTimeout(r, 700));   // 総当たりを遅くする
