@@ -2822,11 +2822,13 @@ async function screenLib() {
         <button class="hbtn" id="jukebtn">🎰 ジューク</button>
       </div>
       <div class="chips">${Object.keys(FILTERS).map(k =>
-        `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]}${counts[k] ? ' ' + counts[k] : ''}</button>`).join('')}</div>
+        `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]}${counts[k] ? ' ' + counts[k] : ''}</button>`).join('')}
+        ${counts.iffy ? `<button class="hbtn" id="triage">まとめて見直す ›</button>` : ''}</div>
     </div>` + gridOf(shown) +
     (shown.length ? '' : `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
 
   wireTabs(); wireGrid();
+  const tg = $('#triage'); if (tg) tg.onclick = () => go('#/triage');
   const redraw = () => { scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0); };
   main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
     S.filter = b.dataset.f; LS.set('filter', S.filter); redraw();
@@ -3386,6 +3388,56 @@ function buildSmart() {
   return refs.slice(0, SMART.n);
 }
 
+/* 要確認をまとめて見直す。1枚ずつ開いていては 500枚は終わらない。
+   合っていれば ○、違えば × だけ。× は選び直しの画面へ送る。 */
+function screenTriage() {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = '要確認をまとめて見直す';
+  $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.add('hide');
+  const list = S.albums.filter(al => {
+    const c = S.covers[al.id];
+    return c && c.url && !c.manual && c.sure === false;
+  });
+  if (!list.length) {
+    main().innerHTML = '<div class="empty">要確認はありません</div>';
+    $('#back').onclick = () => go('#/lib');
+    return;
+  }
+  const page = list.slice(0, 24);
+  main().innerHTML = `
+    <div class="libbar"><div class="row1">
+      <span style="color:var(--dim);font-size:12px">残り ${list.length} 枚</span>
+      <span class="sep"></span>
+      <button class="hbtn" id="allok">この画面ぶんを全部 ○</button>
+    </div></div>
+    <div class="tri">${page.map(al => `
+      <div class="tcard" data-id="${al.id}">
+        <img loading="lazy" src="${esc(coverOf(al))}">
+        <div class="tn">${esc(cleanName(al.name))}</div>
+        <div class="ta">${esc(artistOf(al) || '')} · ${al.tracks.length}曲</div>
+        <div class="tb">
+          <button class="ok" data-ok="${al.id}">○ 合う</button>
+          <button class="ng" data-ng="${al.id}">× 違う</button>
+        </div>
+      </div>`).join('')}</div>`;
+  const drop = id => {
+    const el = main().querySelector(`.tcard[data-id="${id}"]`);
+    if (el) el.remove();
+    if (!main().querySelector('.tcard')) screenTriage();
+  };
+  main().querySelectorAll('[data-ok]').forEach(b => b.onclick = () => {
+    const id = b.dataset.ok;
+    S.covers[id] = Object.assign({}, S.covers[id], { sure: true, manual: true });
+    saveCovers(); drop(id);
+  });
+  main().querySelectorAll('[data-ng]').forEach(b => b.onclick = () => go('#/cover/' + b.dataset.ng));
+  $('#allok').onclick = () => {
+    page.forEach(al => { S.covers[al.id] = Object.assign({}, S.covers[al.id], { sure: true, manual: true }); });
+    saveCovers(); toast(page.length + ' 枚を確かにしました'); screenTriage();
+  };
+  $('#back').onclick = () => go('#/lib');
+}
+
 /* ジャケットの選び直し。違うものが付く前提で、直しやすさを最優先にする。 */
 async function screenCover(id) {
   const al = S.albums.find(a => String(a.id) === String(id));
@@ -3777,6 +3829,7 @@ function routeTo() {
   if (h.startsWith('#/pick/'))   return screenPick(h.slice(7));
   if (h.startsWith('#/album/'))  return screenAlbum(h.slice(8));
   if (h.startsWith('#/cover/'))  return screenCover(h.slice(8));
+  if (h === '#/triage')          return screenTriage();
   if (h === '#/menu')            return screenMenu();
   if (h === '#/now')             return screenNow();
   if (h === '#/vis')             return screenVis();
@@ -4175,7 +4228,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v87');
+  L.push('版: v88');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
