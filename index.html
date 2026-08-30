@@ -152,7 +152,8 @@ body.playing .libbar{top:calc(var(--top) + var(--hdr) + var(--bar))}
 .tk .nm .a{display:block}
 
 .albumhead{display:flex;gap:14px;margin-bottom:16px}
-.albumhead .cov{width:132px;flex:none}
+.albumhead .cov{width:132px;flex:none;align-self:flex-start}
+.albumhead .cov img{width:132px;height:132px;object-fit:cover;border-radius:8px;display:block}
 .albumhead .meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
 .albumhead h2{margin:0;font-size:17px;line-height:1.3}
 .albumhead .a{color:var(--dim);font-size:13px}
@@ -468,6 +469,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=93"></script>
+<script src="./app.js?v=94"></script>
 </body>
 </html>
