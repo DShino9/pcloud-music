@@ -771,14 +771,21 @@ function paintPlayer() {
 }
 function setMediaSession() {
   const c = cur();
+  const t0 = c ? trackTitle(c.al.tracks[c.i]) : '';
+  document.title = t0 ? t0 + '｜音楽棚' : '音楽棚';
   if (!('mediaSession' in navigator) || !c) return;
   const t = c.al.tracks[c.i], cv = coverOf(c.al);
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: trackTitle(t),
-    artist: c.al.artist || '',
-    album: c.al.name,
-    artwork: cv ? [{ src: cv, sizes: '512x512', type: 'image/jpeg' }] : [],
-  });
+  /* 大きさ違いを並べて渡す。iOS はここから選ぶので、1つだけだと粗く出る（耳読に倣う）。 */
+  const art = cv ? [96, 192, 256, 384, 512].map(n =>
+    ({ src: cv, sizes: n + 'x' + n, type: cv.startsWith('data:image/png') ? 'image/png' : 'image/jpeg' })) : [];
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: trackTitle(t),
+      artist: cleanName(c.al.artist) || c.al.name,
+      album: c.al.name,
+      artwork: art,
+    });
+  } catch (e) {}
   const set = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) {} };
   set('play',  () => au.play().catch(() => {}));
   set('pause', () => au.pause());
@@ -787,6 +794,8 @@ function setMediaSession() {
   set('seekbackward', d => { au.currentTime = Math.max(0, au.currentTime - ((d && d.seekOffset) || 15)); });
   set('seekforward',  d => { au.currentTime = au.currentTime + ((d && d.seekOffset) || 15); });
   set('seekto', d => { if (d && d.seekTime != null) au.currentTime = d.seekTime; });
+  set('stop', () => { au.pause(); });
+  try { navigator.mediaSession.playbackState = au.paused ? 'paused' : 'playing'; } catch (e) {}
 }
 function nextTrack(auto) {
   if (auto && P.repeat === 'one') return playAt(P.qi);
@@ -809,8 +818,10 @@ au.addEventListener('error', () => {
   if (GATE && c) diagnoseGate(c.al.tracks[c.i]);
 });
 au.addEventListener('ended', () => nextTrack(true));
-au.addEventListener('play',  paintPlayer);
-au.addEventListener('pause', paintPlayer);
+au.addEventListener('play',  () => { paintPlayer();
+  try { navigator.mediaSession.playbackState = 'playing'; } catch (e) {} });
+au.addEventListener('pause', () => { paintPlayer();
+  try { navigator.mediaSession.playbackState = 'paused'; } catch (e) {} });
 au.addEventListener('timeupdate', () => {
   if (au.duration) $('#seek').style.width = (au.currentTime / au.duration * 100) + '%';
   if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && au.duration) {
@@ -1991,8 +2002,14 @@ function screenSearch() {
 /* ============ 車モード ============ */
 /* 走っているときは、狙わずに押せることが全て。字も的も大きく、選択肢は少なく。 */
 function screenCar() {
-  const c = cur();
-  if (!c) { toast('先に何か流してください'); go('#/lib'); return; }
+  let c = cur();
+  if (!c) {
+    /* 何も鳴っていなければ、その場で棚から適当に流し始める。
+       走り出す前に曲を選ばせない。 */
+    startQueue(shuffle(S.albums.flatMap(albumRefs)).slice(0, 200), 0);
+    c = cur();
+    if (!c) { toast('棚が空です'); go('#/lib'); return; }
+  }
   $('#hdr').classList.add('hide');
   main().innerHTML = `
     <div class="car">
@@ -2342,6 +2359,7 @@ async function screenLib() {
         <button class="hbtn" id="cell">${{ s: '小', m: '中', l: '大' }[S.cell]}</button>
         <button class="hbtn" id="shufAll">🔀</button>
         <button class="hbtn" id="smart">条件</button>
+        <button class="hbtn" id="carbtn">🚗 車</button>
       </div>
       <div class="chips">${Object.keys(FILTERS).map(k =>
         `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]}${counts[k] ? ' ' + counts[k] : ''}</button>`).join('')}</div>
@@ -2361,6 +2379,10 @@ async function screenLib() {
   };
   $('#shufAll').onclick = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
   $('#smart').onclick   = () => go('#/smart');
+  $('#carbtn').onclick  = () => {
+    if (!cur()) startQueue(shuffle(shown.flatMap(albumRefs)), 0);
+    go('#/car');
+  };
   const stop = $('#swstop'); if (stop) stop.onclick = () => { S.sweep.stop = true; toast('止めます'); };
   updateSweepBar();
 }
@@ -3502,7 +3524,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v56');
+  L.push('版: v57');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
@@ -3514,6 +3536,69 @@ async function selftest() {
   L.push(readLog());
   return L.join('\n');
 }
+
+/* ============ 手元の道具から操る ============ */
+/* キーボード、テレビのリモコン（Fire TV など）、ゲームのコントローラ。
+   どれも「送られてくる合図」は似ているので、一箇所で受ける。 */
+const typing = e => {
+  const t = e.target;
+  return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+};
+function nudge(sec) { try { au.currentTime = Math.max(0, au.currentTime + sec); } catch (e) {} }
+function vol(d) { au.volume = Math.max(0, Math.min(1, au.volume + d)); toast('音量 ' + Math.round(au.volume * 100) + '%', 900); }
+function toggle() { au.paused ? au.play().catch(() => {}) : au.pause(); }
+
+addEventListener('keydown', e => {
+  if (typing(e)) { if (e.key === 'Escape') e.target.blur(); return; }
+  const k = e.key;
+  const hit = {
+    ' ': toggle, 'MediaPlayPause': toggle, 'Enter': toggle, 'k': toggle,
+    'MediaTrackNext': () => nextTrack(), 'MediaTrackPrevious': prevTrack,
+    'ArrowRight': () => (e.shiftKey ? nextTrack() : nudge(10)),
+    'ArrowLeft':  () => (e.shiftKey ? prevTrack() : nudge(-10)),
+    'ArrowUp':    () => vol(0.05),
+    'ArrowDown':  () => vol(-0.05),
+    'n': () => nextTrack(), 'p': prevTrack,
+    'j': () => nudge(-10), 'l': () => nudge(10),
+    'm': () => { au.muted = !au.muted; toast(au.muted ? '消音' : '消音を解く', 900); },
+    'f': () => go('#/now'), 'v': () => go('#/now'),
+    'c': () => go('#/car'), 'q': () => go('#/queue'),
+    '/': () => go('#/search'), 's': () => go('#/search'),
+    'g': () => go('#/lib'),
+    'Escape': () => go(location.hash === '#/lib' ? '#/lib' : '#/lib'),
+    'Backspace': () => history.back(),
+    'BrowserBack': () => history.back(),
+  }[k];
+  if (hit) { e.preventDefault(); hit(); }
+}, true);
+
+/* ゲームのコントローラ。押しっぱなしで連射しないよう、離すまで一度だけ。 */
+let padPrev = [];
+function padLoop() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) {
+    if (!p) continue;
+    const now = p.buttons.map(b => b.pressed);
+    const was = padPrev[p.index] || [];
+    const down = i => now[i] && !was[i];
+    if (down(0)) toggle();                  /* A */
+    if (down(1)) history.back();            /* B */
+    if (down(5) || down(15)) nextTrack();   /* R / 右 */
+    if (down(4) || down(14)) prevTrack();   /* L / 左 */
+    if (down(12)) vol(0.05);                /* 上 */
+    if (down(13)) vol(-0.05);               /* 下 */
+    if (down(3)) go('#/now');               /* Y */
+    if (down(2)) go('#/queue');             /* X */
+    if (down(9)) go('#/car');               /* Start */
+    padPrev[p.index] = now;
+  }
+  requestAnimationFrame(padLoop);
+}
+addEventListener('gamepadconnected', e => {
+  toast('コントローラをつなぎました: ' + (e.gamepad.id || '').slice(0, 24), 3000);
+  note('コントローラ: ' + (e.gamepad.id || ''));
+});
+if (navigator.getGamepads) requestAnimationFrame(padLoop);
 
 /* ============ 起動 ============ */
 note('画面を開いた（' + (location.hash || 'ハッシュなし') + '）');
