@@ -2564,15 +2564,21 @@ function importIndex(file, done) {
 const scrollMem = Object.create(null);
 try { history.scrollRestoration = 'manual'; } catch (e) {}
 const hashNow = () => location.hash || '#/lib';
-function keepScroll() { scrollMem[hashNow()] = window.scrollY || 0; }
+const scrollNow = () => (document.scrollingElement || document.documentElement).scrollTop || window.scrollY || 0;
+function keepScroll() { scrollMem[hashNow()] = scrollNow(); }
 function restoreScroll(h) {
   const y = scrollMem[h] || 0;
-  /* 絵が後から入って高さが変わるので、何度か置き直す。 */
-  const put = () => window.scrollTo(0, y);
+  if (!y) { window.scrollTo(0, 0); return; }
+  /* 絵が後から入って高さが変わる。1535枚の棚では伸びきるまで間があるので、
+     置けるようになるまで少しの間だけ何度も置き直す。 */
+  let n = 0;
+  const put = () => {
+    window.scrollTo(0, y);
+    /* まだ高さが足りず届いていないなら、もう少し待つ */
+    if (++n < 24 && Math.abs(scrollNow() - y) > 2) setTimeout(put, 60);
+  };
   put();
   requestAnimationFrame(put);
-  setTimeout(put, 80);
-  setTimeout(put, 300);
 }
 function go(hash) {
   keepScroll();
@@ -2581,7 +2587,10 @@ function go(hash) {
 }
 let lastHash = hashNow();
 window.addEventListener('hashchange', () => {
-  scrollMem[lastHash] = scrollMem[lastHash] || 0;
+  /* ここで実際の位置を控える。控えずに 0 を入れていたので、戻ると必ず頭に
+     飛んでいた（go() を通らない移動＝戻るボタンや直接の書き換えが全部そう）。
+     この時点ではまだ前の画面が出ているので、いまの位置が前の画面の位置。 */
+  scrollMem[lastHash] = scrollNow();
   lastHash = hashNow();
   renderRoute();
 });
@@ -4152,7 +4161,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v84');
+  L.push('版: v85');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
