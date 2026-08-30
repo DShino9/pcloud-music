@@ -3181,8 +3181,12 @@ async function screenLib() {
       <span id="swtxt"></span><button class="hbtn" id="swstop">やめる</button></div>` : '';
   const counts = {};
   for (const k of Object.keys(FILTERS)) counts[k] = S.albums.filter(FILTERS[k][1]).length;
-  const labels = { all: 'すべて', fav: '★', recent: '最近聴いた',
+  /* 札の名前。**FILTERS に足したらここにも足すこと。**
+     片方だけだと札が「undefined」になる（実際そうなった）。
+     取りこぼさないよう、無ければ FILTERS 側の名前を使う。 */
+  const labels = { all: 'すべて', fav: '★', recent: '最近聴いた', most: 'よく聴く',
                    iffy: '要確認', none: 'ジャケット無し' };
+  for (const k of Object.keys(FILTERS)) if (!labels[k]) labels[k] = FILTERS[k][0];
   const gl = genreList();
   const shown = shownAlbums();
   main().innerHTML = sw + `<div class="libbar">
