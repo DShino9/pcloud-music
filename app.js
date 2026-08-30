@@ -4075,7 +4075,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v73');
+  L.push('版: v74');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
@@ -4098,6 +4098,105 @@ async function selftest() {
 const JB = { page: 0, per: 20, pick: '' };
 const jbCode = i => String.fromCharCode(65 + Math.floor(i / 5)) + ((i % 5) + 1);
 
+/* 演奏機構の窓。本物のジュークボックスは、掛かる盤が見えるのが値打ち。 */
+function wireMech() {
+  const cv = $('#jbmech'); if (!cv) return;
+  const x = cv.getContext('2d');
+  let arm = 0;
+  const step = () => {
+    if (location.hash !== '#/juke' || !document.body.contains(cv)) return;
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) { requestAnimationFrame(step); return; }
+    if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const c = cur();
+    const playing = c && !au.paused;
+    /* 箱の中。奥は暗い */
+    const bg = x.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, '#1d1014'); bg.addColorStop(1, '#0d0709');
+    x.fillStyle = bg; x.fillRect(0, 0, w, h);
+    /* 控えの盤。奥に何枚も立てて並ぶ */
+    for (let i = 0; i < 12; i++) {
+      const px = w * 0.04 + i * h * 0.055;
+      x.fillStyle = i % 2 ? 'rgba(34,29,31,.95)' : 'rgba(19,16,18,.95)';
+      x.fillRect(px, h * 0.12, h * 0.030, h * 0.72);
+      x.fillStyle = 'rgba(255,255,255,.05)';
+      x.fillRect(px, h * 0.12, h * 0.006, h * 0.72);
+    }
+    /* 受け皿。寸法は高さで決める（窓は横長なので幅では合わない） */
+    const R = h * 0.52, cx = w - R * 1.45, cy = h * 0.56;
+    x.save(); x.translate(cx, cy);
+    x.beginPath(); x.ellipse(0, R * 0.10, R * 1.06, R * 0.42, 0, 0, 7);
+    x.fillStyle = 'rgba(0,0,0,.55)'; x.fill();
+    /* 盤（少し伏せて見える） */
+    x.save(); x.scale(1, 0.38);
+    if (playing) arm += 0.06;
+    x.rotate(arm);
+    x.beginPath(); x.arc(0, 0, R, 0, 7);
+    const vb = x.createRadialGradient(-R * 0.3, -R * 0.3, R * 0.05, 0, 0, R);
+    vb.addColorStop(0, '#2c2a2a'); vb.addColorStop(.5, '#161516'); vb.addColorStop(1, '#0a0a0b');
+    x.fillStyle = vb; x.fill();
+    for (let i = 0; i < 70; i++) {
+      x.beginPath(); x.arc(0, 0, R * (0.40 + i * 0.0082), 0, 7);
+      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.5)';
+      x.lineWidth = 1; x.stroke();
+    }
+    /* ラベル。掛かっている盤のジャケットを刷る */
+    x.save();
+    x.beginPath(); x.arc(0, 0, R * 0.36, 0, 7); x.clip();
+    x.fillStyle = c ? '#d8b978' : '#8a7a5e';
+    x.fillRect(-R, -R, R * 2, R * 2);
+    if (c) {
+      const lim = coverImage(c.al);
+      if (lim && lim.complete && lim.naturalWidth) {
+        const z = R * 0.36;
+        x.drawImage(lim, -z, -z, z * 2, z * 2);
+      }
+    }
+    x.restore();
+    x.beginPath(); x.arc(0, 0, R * 0.36, 0, 7);
+    x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 1; x.stroke();
+    x.beginPath(); x.arc(0, 0, R * 0.035, 0, 7);
+    x.fillStyle = '#0b0a0c'; x.fill();
+    x.restore();
+    /* 艶 */
+    x.save(); x.scale(1, 0.38);
+    x.beginPath(); x.arc(0, 0, R, 0, 7); x.clip();
+    x.globalCompositeOperation = 'screen';
+    const sh = x.createLinearGradient(-R, -R, R * 0.4, R);
+    sh.addColorStop(.42, 'rgba(255,240,210,0)');
+    sh.addColorStop(.50, 'rgba(255,240,210,.20)');
+    sh.addColorStop(.58, 'rgba(255,240,210,0)');
+    x.fillStyle = sh; x.fillRect(-R, -R, R * 2, R * 2);
+    x.restore();
+    x.restore();
+    /* 腕。掛かっていれば盤の上に降りる */
+    const ax = cx + R * 1.25, ay = cy - R * 0.75, AL = R * 1.30;
+    const a2 = playing ? 0.72 : 0.30;
+    x.save(); x.translate(ax, ay); x.rotate(Math.PI - a2);
+    x.strokeStyle = '#a8a29a'; x.lineWidth = Math.max(2, h * 0.018);
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(AL, 0); x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,.35)'; x.lineWidth = Math.max(1, h * 0.005);
+    x.beginPath(); x.moveTo(0, -h * 0.005); x.lineTo(AL, -h * 0.005); x.stroke();
+    x.fillStyle = '#e8e2d6';
+    x.fillRect(AL - h * 0.02, -h * 0.022, h * 0.055, h * 0.044);
+    x.restore();
+    x.beginPath(); x.arc(ax, ay, Math.max(4, h * 0.055), 0, 7);
+    const pv = x.createRadialGradient(ax - h * 0.02, ay - h * 0.02, 1, ax, ay, h * 0.055);
+    pv.addColorStop(0, '#cfc9c0'); pv.addColorStop(1, '#6f6960');
+    x.fillStyle = pv; x.fill();
+    x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 1; x.stroke();
+    /* 灯り */
+    const gl = x.createRadialGradient(cx, cy - h * 0.1, 0, cx, cy - h * 0.1, w * 0.6);
+    gl.addColorStop(0, `rgba(255,176,58,${playing ? 0.14 : 0.05})`);
+    gl.addColorStop(1, 'rgba(255,176,58,0)');
+    x.fillStyle = gl; x.fillRect(0, 0, w, h);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 function screenJuke() {
   $('#hdr').classList.add('hide');
   const pool = shownAlbums();
@@ -4113,6 +4212,7 @@ function screenJuke() {
         <div class="name">音楽棚</div>
       </div>
       <div class="win">
+        <div class="mechbox"><canvas id="jbmech"></canvas></div>
         <div class="now2">
           ${c && coverOf(c.al) ? `<img src="${esc(coverOf(c.al))}">` : '<img alt="">'}
           <div class="t3">
@@ -4127,6 +4227,8 @@ function screenJuke() {
         <div class="rack">${list.map((al, i) => `
           <button class="strip ${c && c.al.id === al.id ? 'on' : ''}" data-j="${i}">
             <span class="code">${jbCode(i)}</span>
+            ${coverOf(al) ? `<img class="sc" loading="lazy" src="${esc(coverOf(al))}">`
+                          : `<img class="sc" alt="" style="${madeCover(al)}">`}
             <span class="txt">
               <span class="s1">${esc(al.name)}</span>
               <span class="s2">${esc(artistOf(al) || '—')}${albumYear(al) ? ' · ' + esc(albumYear(al)) : ''} · ${al.tracks.length}曲</span>
@@ -4143,6 +4245,7 @@ function screenJuke() {
       </div>
       <div class="foot">札を押すとその盤が掛かります。キーボードなら A1 … D5 の番号でも選べます。</div>
     </div></div>`;
+  wireMech();
   main().querySelectorAll('[data-j]').forEach(b => b.onclick = () => {
     const al = list[+b.dataset.j];
     JB.pick = jbCode(+b.dataset.j);
