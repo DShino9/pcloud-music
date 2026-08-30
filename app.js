@@ -708,8 +708,41 @@ async function playAt(qi) {
     /* 解析器に繋いだ後は、外から流す音に CORS の印を付けないと
        ブラウザが音を消す。印は src を入れる前に決めないと効かない。 */
     /* 出力から拾っているときは印を付けてはいけない。付けると次の曲が読めなくなる。 */
-    au.crossOrigin = (V.ok && !V.tap && !so.local && so.cors === true) ? 'anonymous' : null;
-    if (so.relay) {
+    au.crossOrigin = null;   /* 同じ置き場か、印なしで鳴らす道しか使わない */
+    if (so.gate) {
+      /* ① 入口が中身ごと配る（fileid だけ渡す）
+         ② 端末が出したリンクを入口が取りに行って素通しする
+         ③ 端末が直に取る（鳴るが波形は出ない）
+         ①②が通れば同じ置き場になるので、許可なしで波形が出る。 */
+      const cands = [];
+      if (V.pipe !== 'direct') {
+        cands.push(['入口が配る', '/api/audio?fileid=' + encodeURIComponent(t.id), true]);
+        try {
+          const lk = await fileLink(t.id);
+          cands.push(['入口が中継', '/api/pipe?u=' + encodeURIComponent(lk), true]);
+          cands.push(['端末が直に', lk, false]);
+        } catch (e) { note('リンクを出せない: ' + (e.message || e)); }
+      } else {
+        cands.push(['端末が直に', await fileLink(t.id), false]);
+      }
+      /* 前に通った道を先頭に */
+      if (V.pipeWay) {
+        const k = cands.findIndex(c => c[0] === V.pipeWay);
+        if (k > 0) cands.unshift(cands.splice(k, 1)[0]);
+      }
+      let okWay = null;
+      for (const [how, u, sameOrigin] of cands) {
+        try {
+          await tryLoad(u);
+          src = u; okWay = how;
+          V.pipeWay = how; V.sameOrigin = sameOrigin;
+          if (!sameOrigin) V.pipe = 'direct';
+          note('通った道: ' + how);
+          break;
+        } catch (e2) { note('駄目な道: ' + how); }
+      }
+      if (!src) throw new PCloudError(-9, 'どの道でも音を読めません');
+    } else if (so.relay) {
       /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
          通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
       const cands = [];
@@ -889,7 +922,7 @@ $('#pdots').onclick = () => nowSheet();
    叩いてみるまで分からない。読めない音を Web Audio に通すと
    ブラウザは「音を消す」ので、確かめる前に繋いではいけない。 */
 const V = { ctx:null, src:null, aL:null, aR:null, fL:null, fR:null, td:null,
-            ok:false, cors:null, link:null, direct:null, directUrl:null, pipe:null,
+            ok:false, cors:null, link:null, direct:null, directUrl:null, pipe:null, pipeWay:null, sameOrigin:null,
             on:false, vi:0, raf:0 };
 const BANDS = 84;
 
@@ -1810,7 +1843,13 @@ function screenNow() {
     showTapState();
     if (V.ok) return;                       /* すでに繋がっている */
     const src = au.currentSrc || au.src || '';
-    const own = src.startsWith('blob:') || src.startsWith(location.origin);
+    const own = src.startsWith('blob:') || src.startsWith(location.origin) || V.sameOrigin === true;
+    if (own) {
+      initGraph();
+      if (V.ctx && V.ctx.state === 'suspended') { try { await V.ctx.resume(); } catch (e) {} }
+      showTapState();
+      if (V.ok) { note('同じ置き場なので解析できた（許可不要）'); return; }
+    }
     /* 読める音かどうかは、実際に印を付けて読み込み直してみるのが確か。
        通れば解析でき、通らなければ元に戻す（音は止めない）。 */
     /* まず鳴っている出力から拾う。ファイルの中身が読めなくても関係ない。 */
@@ -1995,15 +2034,10 @@ async function trackSource(t) {
   const hit = await cachedResponse(t.id);
   if (hit) return { url: URL.createObjectURL(await hit.blob()), local: true };
   if (blobs.has(t.id)) return { url: blobs.get(t.id), local: true };
-  /* 端末自身が発行したリンクなら pCloud は渡す。
-     入口があるときは、そのリンクを入口に取りに行かせて素通ししてもらう。
-     同じ置き場から配られるので中身が読め、許可なしで波形が出る。
-     入口が断られたら、端末が直に取りに行く（音は鳴るが波形は出ない）。 */
-  const link = await fileLink(t.id);
-  if (GATE && V.pipe !== false) {
-    return { url: '/api/pipe?u=' + encodeURIComponent(link), local: true, cors: true, pipe: link };
-  }
-  if (GATE || S.code) return { url: link, local: false, cors: false };
+  /* 入口ごしに配れれば同じ置き場になるので、中身が読めて許可なしで波形が出る。
+     道は3つ。実際に鳴るか試して、通ったものを覚えて次から使う。 */
+  if (GATE) return { url: null, gate: true, local: true, cors: true };
+  if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   if (S.code) return { url: await fileLink(t.id), local: false, cors: false };
   /* 中継所がある場合の道は playAt 側で順に試す。ここでは何もしない。 */
   if (S.relay) return { url: null, relay: true, local: false, cors: true };
@@ -3698,7 +3732,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v64');
+  L.push('版: v65');
+  L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
