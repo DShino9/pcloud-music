@@ -1300,6 +1300,66 @@ async function loadIndexFromCloud() {
   return false;
 }
 
+/* ============ 索引の持ち出しと取り込み ============ */
+/* ジャケットや★は置き場（オリジン）ごとにしまわれる。
+   入口へ移ると前の棚の記録が見えなくなるので、файл で持ち運べるようにする。 */
+function exportIndex() {
+  const body = JSON.stringify({
+    v: 3, at: new Date().toISOString(), rootName: S.rootName,
+    covers: S.covers, meta: S.meta, fav: S.fav, lists: S.lists,
+    plays: S.plays, hist: S.hist.slice(0, 200),
+    byPath: Object.fromEntries(S.albums
+      .filter(al => S.covers[al.id])
+      .map(al => [pathKey(al), S.covers[al.id]])),
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+  a.download = '音楽棚.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('書き出しました');
+}
+/* フォルダの道を鍵にする。棚を読み直しても、置き場が変わっても同じ物を指せる。 */
+const nfc = s => (s || '').normalize('NFC');
+const pathKey = al => nfc(String(al.path || '').split(' / ').slice(1).join('/')) || nfc(al.artist + '/' + al.name);
+
+function applyIndex(j) {
+  let n = 0;
+  if (j.covers) { for (const [k, v] of Object.entries(j.covers)) if (!S.covers[k]) { S.covers[k] = v; n++; } }
+  if (j.meta)   S.meta  = Object.assign({}, j.meta, S.meta);
+  if (j.fav)    S.fav   = Object.assign({}, j.fav, S.fav);
+  if (j.lists)  S.lists = Object.assign({}, j.lists, S.lists);
+  if (j.plays)  S.plays = Object.assign({}, j.plays, S.plays);
+  /* 道を鍵にしたものは、いまの棚に当て直す（別の置き場から来たとき用） */
+  if (j.byPath) {
+    const byKey = new Map(S.albums.map(al => [pathKey(al), al]));
+    for (const [k, v] of Object.entries(j.byPath)) {
+      if (v && v.skip) continue;
+      const al = byKey.get(nfc(k));
+      if (al && !S.covers[al.id]) {
+        S.covers[al.id] = { url: v.url, src: v.src, q: v.q, manual: !!v.manual,
+                            score: v.score, sure: v.sure !== false };
+        if (v.g || v.y) S.meta[al.id] = { g: v.g || '', y: v.y || '' };
+        n++;
+      }
+    }
+  }
+  saveCovers(); saveMeta(); saveFav(); saveLists(); savePlays();
+  return n;
+}
+function importIndex(file, done) {
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const n = applyIndex(JSON.parse(r.result));
+      toast(n + ' 枚ぶん取り込みました' + (LS.full ? '（★記憶が一杯）' : ''), 4000);
+      note('索引を取り込んだ: ' + n);
+      S.albums = []; done && done();
+    } catch (e) { toast('読めません: ' + (e.message || e), 5000); }
+  };
+  r.readAsText(file);
+}
+
 /* ============ 画面 ============ */
 /* ハッシュが同じだと hashchange が飛ばない。
    #/pick/0 が付いたまま開き直してログインすると、成功しても画面が変わらず
@@ -1908,6 +1968,9 @@ function screenMenu() {
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
       <button class="row" id="hist"><span class="nm">聴いた履歴</span><span class="sub">${S.hist.length} 件</span></button>
+      <button class="row" id="exp"><span class="nm">索引を書き出す</span><span class="sub">${Object.keys(S.covers).length} 枚</span></button>
+      <button class="row" id="imp"><span class="nm">索引を読み込む</span><span class="sub">別の置き場から移すとき</span></button>
+      <input id="impf" type="file" accept="application/json,.json" class="hide">
       <button class="row" id="save"><span class="nm">索引を pCloud に控える</span><span class="sub">${INDEX_NAME}</span></button>
       <button class="row" id="load"><span class="nm">索引を pCloud から取り込む</span></button>
       <button class="row" id="pick"><span class="nm">音楽フォルダを選び直す</span><span class="sub">${esc(S.rootName)}</span></button>
@@ -1932,6 +1995,12 @@ function screenMenu() {
   $('#meta').onclick  = () => sweepMeta();
   $('#lists').onclick = () => go('#/lists');
   $('#hist').onclick  = () => go('#/history');
+  $('#exp').onclick = () => exportIndex();
+  $('#imp').onclick = () => $('#impf').click();
+  $('#impf').onchange = e => {
+    const f = e.target.files && e.target.files[0];
+    if (f) importIndex(f, () => go('#/lib'));
+  };
   $('#save').onclick = async () => { try { await saveIndexToCloud(); toast('控えました'); } catch (e) { toast('控えられません: ' + e.message); } };
   $('#load').onclick = async () => { try { toast(await loadIndexFromCloud() ? '取り込みました' : '控えがありません'); renderRoute(); } catch (e) { toast(e.message); } };
   $('#pick').onclick = () => go('#/pick/0');
@@ -2309,7 +2378,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v29');
+  L.push('版: v30');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
