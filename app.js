@@ -497,8 +497,20 @@ function updateSweepBar() {
 const coverOf = al => {
   const c = S.covers[al.id];
   if (c) return c.url;
-  if (al.folderCover && !S.code) return thumbUrl(al.folderCover, 400);
-  return null;   /* 符号のときは往復が要るので、棚では出さない（自動収集で付く） */
+  if (al.folderCover && !S.code && !GATE) return thumbUrl(al.folderCover, 400);
+  return null;
+};
+/* ジャケットが手に入らない盤は、名前から色を決めて題字だけの札を作る。
+   空の四角より探しやすく、他と取り違えない。絵ではないと分かる見た目にする。 */
+function hueOf(t) {
+  let h = 0;
+  const s2 = String(t || '');
+  for (let i = 0; i < s2.length; i++) h = (h * 31 + s2.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+const madeCover = al => {
+  const h = hueOf(al.name + al.artist);
+  return `background:linear-gradient(150deg,hsl(${h} 42% 26%),hsl(${(h + 40) % 360} 38% 14%))`;
 };
 
 /* ============ 操作シート ============ */
@@ -812,6 +824,33 @@ const BANDS = 84;
 
 /* いま鳴っている音そのものを読めるかで決める。
    読めない音を解析器に通すと、ブラウザは音を消す（実機で踏んだ）。 */
+/* CORS の印を付けて読み込み直せるか試す。通れば解析器に繋げる。
+   駄目なら印を外して元に戻す。位置も再生状態も保つ。 */
+async function tryCors() {
+  const src = au.currentSrc || au.src || '';
+  if (!src || src.startsWith('blob:')) return false;
+  const pos = au.currentTime, playing = !au.paused;
+  const load = cross => new Promise(res => {
+    let done = false;
+    const fin = ok => {
+      if (done) return; done = true; clearTimeout(tm); probing = false;
+      au.removeEventListener('loadedmetadata', onOk); au.removeEventListener('error', onNg);
+      res(ok);
+    };
+    const onOk = () => fin(true), onNg = () => fin(false);
+    const tm = setTimeout(() => fin(false), 9000);
+    probing = true;
+    au.addEventListener('loadedmetadata', onOk); au.addEventListener('error', onNg);
+    au.crossOrigin = cross; au.src = src; au.load();
+  });
+  const ok = await load('anonymous');
+  if (!ok) await load(null);
+  try { au.currentTime = pos; } catch (e) {}
+  if (playing) au.play().catch(() => {});
+  note('CORS で読み直し: ' + (ok ? '通った（解析できる）' : '駄目'));
+  return ok;
+}
+
 async function canAnalyse() {
   const src = au.currentSrc || au.src || '';
   if (!src) return false;
@@ -906,13 +945,22 @@ function quietSpot(im, id) {
     const g = c.getContext('2d', { willReadFrequently: true });
     g.drawImage(im, 0, 0, n, n);
     const d = g.getImageData(0, 0, n, n).data;
-    const lum = new Float32Array(n * n);
-    for (let i = 0; i < n * n; i++) lum[i] = (d[i*4]*0.299 + d[i*4+1]*0.587 + d[i*4+2]*0.114) / 255;
+    const lum = new Float32Array(n * n), skin = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) {
+      const r = d[i*4], gg = d[i*4+1], b = d[i*4+2];
+      lum[i] = (r*0.299 + gg*0.587 + b*0.114) / 255;
+      /* 肌の色。顔は明るさの差が小さいので「静か」と誤判定される。
+         ここを見ないと、むしろ顔を狙って隠してしまう（実際そうなっていた）。 */
+      const mx = Math.max(r,gg,b), mn = Math.min(r,gg,b);
+      skin[i] = (r > 90 && gg > 35 && b > 18 && mx - mn > 12 &&
+                 r > gg && gg >= b && r - gg > 8 && r - gg < 90) ? 1 : 0;
+    }
     const e = new Float32Array(n * n);
     for (let y = 1; y < n - 1; y++) for (let x = 1; x < n - 1; x++) {
       const i = y * n + x;
       e[i] = Math.abs(lum[i]-lum[i-1]) + Math.abs(lum[i]-lum[i+1])
-           + Math.abs(lum[i]-lum[i-n]) + Math.abs(lum[i]-lum[i+n]);
+           + Math.abs(lum[i]-lum[i-n]) + Math.abs(lum[i]-lum[i+n])
+           + skin[i] * 0.9;                      /* 肌は強く避ける */
     }
     /* 盤は左下に居るので、そこは候補にしない */
     const box = { br: [0.50,0.60,0.97,0.88], tr: [0.50,0.30,0.97,0.58],
@@ -1071,26 +1119,21 @@ const VD = {
     /* 札が下にあるときは上へ逃がす */
     const my = (spot === 'br') ? oy + u(0.14) : oy + u(0.845);
     const live = V.ok;
+    if (live) {
     x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
     [['L', lvL], ['R', lvR]].forEach((row, ri) => {
       const y = my + ri * rowH;
-      x.fillStyle = live ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.40)';
+      x.fillStyle = 'rgba(255,255,255,.95)';
       x.fillText(row[0], mx, y + u(0.014));
       for (let i = 0; i < n; i++) {
-        const v = live ? band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0) : 0;
+        const v = band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0);
         const bh = Math.max(u(0.004), v * u(0.05));
-        x.fillStyle = live ? `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`
-                           : 'rgba(255,255,255,.20)';
+        x.fillStyle = `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`;
         x.fillRect(mx + u(0.05) + i * gap, y - bh / 2, bw, bh);
       }
     });
-    if (!live) {
-      x.font = u(0.026) + 'px "Hiragino Sans",-apple-system,sans-serif';
-      x.fillStyle = 'rgba(255,255,255,.55)';
-      x.textAlign = 'right';
-      x.fillText('端末に入れると動きます', ox + S0 - u(0.055), my + rowH * 2 + u(0.02));
-      x.textAlign = 'left';
     }
+
     x.restore();
     x.beginPath(); x.rect(ox - 1, oy - 1, S0 + 2, S0 + 2);
     x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.22})`;
@@ -1314,12 +1357,11 @@ function screenNow() {
     if (V.ok) return;                       /* すでに繋がっている */
     const src = au.currentSrc || au.src || '';
     const own = src.startsWith('blob:') || src.startsWith(location.origin);
-    if (!own && !(await canAnalyse())) {
+    /* 読める音かどうかは、実際に印を付けて読み込み直してみるのが確か。
+       通れば解析でき、通らなければ元に戻す（音は止めない）。 */
+    if (!own && !(await canAnalyse()) && !(await tryCors())) {
       $('#nmsg').className = 'msg';
-      $('#nmsg').innerHTML = 'いまの流し方だと音を解析できません（レベル計は止まったままです）。' +
-        ' <button class="hbtn" id="ndl" style="padding:5px 10px;font-size:12px">このアルバムを端末に入れる</button>';
-      const nd = $('#ndl');
-      if (nd) nd.onclick = e => { e.currentTarget.textContent = '入れています…'; downloadAlbum(cc.al, e.currentTarget); };
+      $('#nmsg').textContent = 'この曲は pCloud が中身を読ませないので、レベル計は出ません（絵は動きます）';
       note('解析しない（読めない音）');
       return;
     }
@@ -1922,7 +1964,7 @@ async function screenLib() {
     const y = albumYear(al);
     return `<div class="al" data-open="${al.id}" role="button" tabindex="0">
       <div class="cov">${cv ? `<img loading="lazy" src="${esc(cv)}" onerror="this.style.display='none'">`
-                            : '<span class="ph">♪</span>'}${badge}${star}
+                            : `<span class="made" style="${madeCover(al)}">${esc(al.name)}</span>`}${badge}${star}
         <button class="dots" data-menu="${al.id}" aria-label="操作">⋮</button>
         <button class="go" data-play="${al.id}" aria-label="再生">▶</button>
       </div>
@@ -1978,7 +2020,7 @@ function screenAlbum(id) {
   const g = albumGenre(al), y = albumYear(al), pc = playCount(al);
   main().innerHTML = `
     <div class="albumhead">
-      <div class="cov">${cv ? `<img src="${esc(cv)}">` : '<span class="ph">♪</span>'}</div>
+      <div class="cov">${cv ? `<img src="${esc(cv)}">` : `<span class="made" style="${madeCover(al)}">${esc(al.name)}</span>`}</div>
       <div class="meta">
         <h2>${esc(al.name)}</h2>
         <div class="a">${esc(al.artist)}</div>
@@ -2151,13 +2193,20 @@ async function screenCover(id) {
   const cur0 = S.covers[al.id] || {};
   const me = parseAlbum(al);
   /* 探し方の当て方を変える札。1回で当たらないときはここを押す。 */
+  const bare = me.album
+    .replace(/\[?Disc\s*\d+\]?/ig, ' ')
+    .replace(/(ORIGINAL\s*)?SOUND\s*TRACK|オリジナル・?サウンドトラック|サウンドトラック|OST/ig, ' ')
+    .replace(/\s+/g, ' ').trim();
   const chips = [
     ['そのまま', albumQuery(al)],
     ['アルバム名だけ', me.album],
+    ['巻数を外す', bare],
+    ['サントラとして', bare + ' サウンドトラック'],
     ['アーティストだけ', me.artist],
+    ['1曲目の名前で', trackTitle(al.tracks[0] || { name: '' })],
     ['英語表記で', (me.artist + ' ' + me.album).replace(/[ぁ-んァ-ヶ一-龠]/g, '').trim()],
-    ['album を足す', albumQuery(al) + ' album'],
-  ].filter(c => c[1] && c[1].length > 1);
+  ].filter(c => c[1] && c[1].length > 1 && c[1] !== albumQuery(al));
+  chips.unshift(['そのまま', albumQuery(al)]);
   let q = cur0.q || albumQuery(al);
   const iffy = S.albums.filter(x => { const c = S.covers[x.id]; return c && !c.manual && c.sure === false; });
   const nextIffy = iffy.find(x => String(x.id) !== String(al.id));
@@ -2825,7 +2874,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v46');
+  L.push('版: v48');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
