@@ -265,7 +265,11 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 #player .ctl #pdots{width:28px;font-size:16px;color:var(--dim)}
 #player .ctl button{width:42px;height:42px;border-radius:50%;font-size:17px;display:flex;align-items:center;justify-content:center}
 #player .ctl button:active{background:#2c2c38}
-#seek{position:absolute;left:0;bottom:-1px;height:2px;background:var(--accent);width:0}
+#seekwrap{position:absolute;left:0;right:0;bottom:-1px;height:14px;touch-action:none;cursor:pointer}
+#seekwrap::before{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;background:#2c2c38}
+#seek{position:absolute;left:0;bottom:0;height:3px;background:var(--accent);width:0}
+.nowbar{touch-action:none;cursor:pointer}
+.bar2{touch-action:none;cursor:pointer}
 #player.gone{display:none}
 .toast{position:fixed;left:50%;transform:translateX(-50%);
   bottom:calc(var(--safe-b) + 18px);z-index:60;
@@ -400,7 +404,7 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <main id="main"></main>
 
 <div id="player" class="gone">
-  <div id="seek"></div>
+  <div id="seekwrap"><div id="seek"></div></div>
   <img class="pc" id="pcov" alt="">
   <div class="info" id="pinfo"><div class="ti" id="pti">—</div><div class="ar" id="par"></div>
     <div class="nx" id="pnx"></div></div>
@@ -422,6 +426,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=69"></script>
+<script src="./app.js?v=71"></script>
 </body>
 </html>

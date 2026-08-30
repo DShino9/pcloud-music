@@ -715,6 +715,44 @@ async function bytesUrl(t) {
 }
 const tapped = () => !!(V.ok && !V.tap);   /* 解析器に直結している */
 
+/* 掴んで頭出し。指を離すまで表示は指について来る。 */
+let seekDrag = false;
+function wireSeek(barId, fillId) {
+  const bar = $('#' + barId), fill = $('#' + fillId);
+  if (!bar || bar.dataset.wired) return;
+  bar.dataset.wired = '1';
+  const at = ev => {
+    const r = bar.getBoundingClientRect();
+    const cx2 = (ev.touches && ev.touches[0] ? ev.touches[0].clientX : ev.clientX);
+    return Math.max(0, Math.min(1, (cx2 - r.left) / Math.max(1, r.width)));
+  };
+  const show = f => { if (fill) fill.style.width = (f * 100) + '%'; };
+  const move = ev => { if (!seekDrag) return; ev.preventDefault(); show(at(ev)); };
+  const up = ev => {
+    if (!seekDrag) return;
+    const f = at(ev.changedTouches ? { clientX: ev.changedTouches[0].clientX } : ev);
+    seekDrag = false;
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    if (au.duration) au.currentTime = f * au.duration;
+  };
+  bar.addEventListener('pointerdown', ev => {
+    if (!au.duration) return;
+    seekDrag = true; show(at(ev));
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  });
+}
+
+/* 解析器を畳む。繋いだままだと外の置き場の音が消えるため。 */
+function foldGraph() {
+  if (!V.ctx) return;
+  try { V.src && V.src.disconnect(); } catch (e) {}
+  try { V.ctx.close(); } catch (e) {}
+  V.ctx = null; V.src = null; V.aL = null; V.aR = null; V.ok = false;
+  V.folded = true;
+  note('解析器を畳んだ（外の置き場から鳴らすため）');
+  showTapState();
+}
+
 /* 鳴っているのに音が出ていないことがある。気づいて取り直す。 */
 let silT = null;
 function guardSilence(t) {
@@ -728,13 +766,18 @@ function guardSilence(t) {
     note('鳴っているのに音がない。取り直す');
     const at = au.currentTime;
     try {
-      au.src = await bytesUrl(t);
-      V.pipeWay = '取り込み'; V.sameOrigin = true;
-      au.currentTime = at;
-      await au.play();
-      showTapState();
-      toast('音の道を取り直しました', 2500);
-    } catch (e) { note('取り直しも駄目: ' + (e.message || e)); }
+      const u2 = await bytesUrl(t);
+      au.src = u2; V.pipeWay = '取り込み'; V.sameOrigin = true;
+      au.currentTime = at; await au.play();
+      showTapState(); toast('音の道を取り直しました', 2500);
+    } catch (e) {
+      note('取り込みも駄目。直に戻す: ' + (e.message || e));
+      foldGraph();
+      try {
+        au.src = await fileLink(t.id); V.sameOrigin = false; V.pipe = 'direct';
+        au.currentTime = at; await au.play(); showTapState();
+      } catch (e2) { note('直も駄目: ' + (e2.message || e2)); }
+    }
   }, 2600);
 }
 async function playAt(qi) {
@@ -764,12 +807,10 @@ async function playAt(qi) {
           cands.push(['入口が中継', '/api/pipe?u=' + encodeURIComponent(await fileLink(t.id)), true]);
         } catch (e) { note('リンクを出せない: ' + (e.message || e)); }
       }
-      /* 解析器に繋がっている間、外の置き場から流すとブラウザが音を消す。
-         だから繋がっているときは外へ落とさない。 */
-      if (!tapped()) {
-        try { cands.push(['端末が直に', await fileLink(t.id), false]); }
-        catch (e) { note('リンクを出せない: ' + (e.message || e)); }
-      }
+      /* 端末が直に取る道だけは必ず残す。入口は pCloud に断られることがあり
+         （Cloudflare は行きと帰りで出口が変わる）、塞ぐと音楽が止まる。 */
+      try { cands.push(['端末が直に', await fileLink(t.id), false]); }
+      catch (e) { note('リンクを出せない: ' + (e.message || e)); }
       /* 前に通った道を先頭に */
       if (V.pipeWay) {
         const k = cands.findIndex(c => c[0] === V.pipeWay);
@@ -787,15 +828,10 @@ async function playAt(qi) {
           if (how === '入口が中継') V.pipeDead = 'pipe';
         }
       }
-      /* どれも駄目。中身をこちらへ取り込んで鳴らす（自分の置き場になるので必ず解析できる）。 */
-      if (!src) {
-        try {
-          src = await bytesUrl(t);
-          V.pipeWay = '取り込み'; V.sameOrigin = true;
-          note('取り込んで鳴らす');
-        } catch (e3) { note('取り込みも駄目: ' + (e3.message || e3)); }
-      }
       if (!src) throw new PCloudError(-9, 'どの道でも音を読めません');
+      /* 外の置き場の音は、解析器に繋いだ要素だと無音になる。
+         音楽を止めるくらいなら解析器を畳む。波形はタブの音から拾い直す。 */
+      if (V.sameOrigin === false && tapped()) foldGraph();
     } else if (so.relay) {
       /* ① ブラウザが pCloud から直に読む ② 中継所に流してもらう。
          通るかどうかは相手次第なので、実際に読ませて先に通った方を使う。 */
@@ -937,7 +973,8 @@ au.addEventListener('play',  () => { paintPlayer();
 au.addEventListener('pause', () => { paintPlayer();
   try { navigator.mediaSession.playbackState = 'paused'; } catch (e) {} });
 au.addEventListener('timeupdate', () => {
-  if (au.duration) $('#seek').style.width = (au.currentTime / au.duration * 100) + '%';
+  if (au.duration && !seekDrag) $('#seek').style.width = (au.currentTime / au.duration * 100) + '%';
+  wireSeek('seekwrap', 'seek');
   if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && au.duration) {
     try { navigator.mediaSession.setPositionState(
       { duration: au.duration, position: au.currentTime, playbackRate: au.playbackRate }); } catch (e) {}
@@ -1437,20 +1474,19 @@ const VD = {
     x.shadowBlur = 0; x.shadowOffsetY = 0;
 
     /* ④ 盤 */
-    const dr = u(0.40), cx = ox + u(0.20), cy = oy + u(0.735);
+    const dr = u(0.52), cx = ox + u(0.055), cy = oy + u(0.90);
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
     x.beginPath(); x.arc(0, 0, dr, 0, 7); x.save(); x.clip();
     if (discKind === 'lp') {
-      /* レコード。黒い樹脂に、無数の溝。光は溝に沿って細く伸びる。 */
-      const vb = x.createRadialGradient(-dr * 0.3, -dr * 0.35, dr * 0.05, 0, 0, dr);
-      vb.addColorStop(0,   'rgba(38,36,36,1)');
+      /* レコード。黒い樹脂に無数の溝。光は溝に沿って扇形に伸びる。 */
+      const vb = x.createRadialGradient(-dr * 0.30, -dr * 0.35, dr * 0.05, 0, 0, dr);
+      vb.addColorStop(0,   'rgba(40,38,38,1)');
       vb.addColorStop(.45, 'rgba(20,19,20,1)');
       vb.addColorStop(1,   'rgba(9,9,10,1)');
       x.fillStyle = vb; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      /* 溝。数で決まる。細く、たくさん。 */
-      const N = 320, r0 = dr * 0.375, r1 = dr * 0.965;
+      const r0 = dr * 0.375, r1 = dr * 0.965, N = 320;
       for (let i = 0; i < N; i++) {
         const rr2 = r0 + (r1 - r0) * (i / N);
         x.strokeStyle = i % 2 ? 'rgba(255,255,255,.030)' : 'rgba(0,0,0,.34)';
@@ -1464,7 +1500,7 @@ const VD = {
         x.beginPath(); x.arc(0, 0, rr2, 0, 7); x.stroke();
       }
       x.lineWidth = 1;
-      /* 溝に乗る光。まっすぐな帯ではなく、扇形に広がる艶 */
+      /* 溝に乗る艶。光の向きは盤が回っても動かない。 */
       x.save();
       x.globalCompositeOperation = 'screen';
       const sh = x.createConicGradient(-spin + 2.2, 0, 0);
@@ -1472,15 +1508,13 @@ const VD = {
         const t = i / 72;
         let near = 1;
         for (const k of [0.00, 0.50]) { const d0 = Math.abs(t - k); near = Math.min(near, Math.min(d0, 1 - d0)); }
-        const a2 = Math.exp(-Math.pow(near / 0.075, 2)) * 0.5;
-        sh.addColorStop(t, `rgba(214,206,190,${a2.toFixed(3)})`);
+        sh.addColorStop(t, `rgba(216,208,192,${(Math.exp(-Math.pow(near / 0.075, 2)) * 0.46).toFixed(3)})`);
       }
       x.fillStyle = sh; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      /* 中心と縁では艶を落とす */
       const vf = x.createRadialGradient(0, 0, 0, 0, 0, dr);
       vf.addColorStop(0,   'rgba(0,0,0,1)');
       vf.addColorStop(.38, 'rgba(0,0,0,1)');
-      vf.addColorStop(.5,  'rgba(0,0,0,0)');
+      vf.addColorStop(.50, 'rgba(0,0,0,0)');
       vf.addColorStop(.96, 'rgba(0,0,0,0)');
       vf.addColorStop(1,   'rgba(0,0,0,1)');
       x.globalCompositeOperation = 'destination-out';
@@ -1488,29 +1522,36 @@ const VD = {
       x.restore();
       x.save(); x.globalCompositeOperation = 'destination-over';
       x.fillStyle = vb; x.fillRect(-dr, -dr, dr * 2, dr * 2); x.restore();
-      x.restore();
+      x.restore();                                   /* 切り抜きを閉じる */
+
       /* 中央の紙のラベル */
       const lr = dr * 0.355;
       x.beginPath(); x.arc(0, 0, lr, 0, 7);
       const lg = x.createRadialGradient(-lr * 0.3, -lr * 0.3, lr * 0.1, 0, 0, lr);
-      lg.addColorStop(0, '#e8d9b6'); lg.addColorStop(1, '#c9ab72');
+      lg.addColorStop(0, '#e9dab8'); lg.addColorStop(1, '#c7a86e');
       x.fillStyle = lg; x.fill();
       x.strokeStyle = 'rgba(0,0,0,.45)'; x.lineWidth = 1; x.stroke();
       x.beginPath(); x.arc(0, 0, lr * 0.86, 0, 7);
       x.strokeStyle = 'rgba(120,92,44,.5)'; x.stroke();
       x.save();
-      x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillStyle = '#40331c';
-      let fs = dr * 0.075;
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      let fs = dr * 0.072;
       const nm = cleanName(al.name);
       x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
-      while (x.measureText(nm).width > lr * 1.5 && fs > dr * 0.032) {
+      while (x.measureText(nm).width > lr * 1.5 && fs > dr * 0.030) {
         fs *= 0.9; x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
       }
-      x.fillText(nm, 0, -lr * 0.30);
-      x.font = (dr * 0.055) + 'px "Hiragino Sans",-apple-system,sans-serif';
-      x.fillStyle = 'rgba(64,51,28,.85)';
-      const ar = (artistOf(al) || '').slice(0, 16);
-      x.fillText(ar, 0, lr * 0.44);
+      x.fillStyle = '#40331c'; x.fillText(nm, 0, -lr * 0.32);
+      let fs2 = dr * 0.052;
+      const ttl = trackTitle(tk);
+      x.font = fs2 + 'px "Hiragino Sans",-apple-system,sans-serif';
+      while (x.measureText(ttl).width > lr * 1.5 && fs2 > dr * 0.026) {
+        fs2 *= 0.9; x.font = fs2 + 'px "Hiragino Sans",-apple-system,sans-serif';
+      }
+      x.fillStyle = 'rgba(64,51,28,.9)'; x.fillText(ttl, 0, lr * 0.06);
+      x.font = (dr * 0.046) + 'px "Hiragino Sans",-apple-system,sans-serif';
+      x.fillStyle = 'rgba(84,68,38,.85)';
+      x.fillText((artistOf(al) || '').slice(0, 18), 0, lr * 0.46);
       x.textAlign = 'left'; x.textBaseline = 'alphabetic';
       x.restore();
       /* 芯の穴 */
@@ -1521,131 +1562,107 @@ const VD = {
       x.strokeStyle = 'rgba(255,255,255,.10)'; x.lineWidth = Math.max(1, dr * 0.01); x.stroke();
       x.beginPath(); x.arc(0, 0, dr, 0, 7);
       x.strokeStyle = 'rgba(0,0,0,.6)'; x.lineWidth = 1; x.stroke();
-      x.restore();
+      x.restore();                                   /* 位置ずらしを閉じる */
       x.beginPath(); x.arc(cx, cy, dr, 0, 7);
       x.strokeStyle = 'rgba(255,255,255,.14)'; x.lineWidth = 1; x.stroke();
     } else {
-    /* 盤の地。実物は暗い銀。ジャケットの色はごく薄く透ける程度。 */
-    if (ok) { const z = dr * 4; x.globalAlpha = 0.16; x.drawImage(im, -z, -z, z * 2, z * 2); x.globalAlpha = 1; }
-    /* 記録面は鏡。写るのは周りの景色なので、上は暗く、下は明るい。 */
-    const base = x.createLinearGradient(0, -dr, 0, dr);
-    base.addColorStop(0,   'rgba(14,16,20,.98)');
-    base.addColorStop(.30, 'rgba(28,32,40,.97)');
-    base.addColorStop(.48, 'rgba(78,86,100,.96)');
-    base.addColorStop(.58, 'rgba(46,52,63,.97)');
-    base.addColorStop(.80, 'rgba(20,23,29,.98)');
-    base.addColorStop(1,   'rgba(10,12,15,.98)');
-    x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+      /* CD。ジャケットの色はごく薄く透ける程度。 */
+      if (ok) { const z = dr * 4; x.globalAlpha = 0.16; x.drawImage(im, -z, -z, z * 2, z * 2); x.globalAlpha = 1; }
+      /* 記録面は鏡。写るのは周りの景色なので、上は暗く、下は明るい。 */
+      const base = x.createLinearGradient(0, -dr, 0, dr);
+      base.addColorStop(0,   'rgba(14,16,20,.98)');
+      base.addColorStop(.30, 'rgba(28,32,40,.97)');
+      base.addColorStop(.48, 'rgba(78,86,100,.96)');
+      base.addColorStop(.58, 'rgba(46,52,63,.97)');
+      base.addColorStop(.80, 'rgba(20,23,29,.98)');
+      base.addColorStop(1,   'rgba(10,12,15,.98)');
+      x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
 
-    /* 虹の正体は回折。見る角度を止めれば、色は「半径」に沿って変わる。
-       角度で回すと嘘になる（前はそれをやっていた）。
-       同心の色の帯を作り、光が当たった扇形だけを残す。 */
-    if (x.createConicGradient) {
-      const rg = x.createRadialGradient(0, 0, dr * 0.19, 0, 0, dr);
-      const turns = 2.4, steps = 60, h0 = (spin * 34) % 360;
-      for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        rg.addColorStop(t, `hsl(${(h0 + t * 360 * turns) % 360}, 96%, 56%)`);
+      /* 虹の正体は回折。見る角度を止めれば、色は「半径」に沿って変わる。
+         同心の色の帯を作り、光が当たった扇形だけを残す。 */
+      if (x.createConicGradient) {
+        const rg = x.createRadialGradient(0, 0, dr * 0.19, 0, 0, dr);
+        const turns = 2.4, steps = 60, h0 = (spin * 34) % 360;
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          rg.addColorStop(t, `hsl(${(h0 + t * 360 * turns) % 360}, 96%, 56%)`);
+        }
+        x.save();
+        x.globalCompositeOperation = 'screen';
+        x.globalAlpha = 0.72;
+        x.fillStyle = rg; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+        x.globalAlpha = 1;
+        const win = x.createConicGradient(-spin + 2.15, 0, 0);
+        const keep = [0.00, 0.50], wid = 0.045;
+        for (let i = 0; i <= 72; i++) {
+          const t = i / 72;
+          let near = 1;
+          for (const k of keep) { const d0 = Math.abs(t - k); near = Math.min(near, Math.min(d0, 1 - d0)); }
+          const a2 = 1 - Math.exp(-Math.pow(near / wid, 2) * 1.6);
+          win.addColorStop(t, `rgba(0,0,0,${Math.max(0, Math.min(1, a2)).toFixed(3)})`);
+        }
+        x.globalCompositeOperation = 'destination-out';
+        x.fillStyle = win; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+        const fade = x.createRadialGradient(0, 0, 0, 0, 0, dr);
+        fade.addColorStop(0,    'rgba(0,0,0,1)');
+        fade.addColorStop(.185, 'rgba(0,0,0,1)');
+        fade.addColorStop(.24,  'rgba(0,0,0,0)');
+        fade.addColorStop(.95,  'rgba(0,0,0,0)');
+        fade.addColorStop(.985, 'rgba(0,0,0,1)');
+        x.fillStyle = fade; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+        x.restore();
+        x.save(); x.globalCompositeOperation = 'destination-over';
+        x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2); x.restore();
       }
+      /* 光の筋。斜めに走る白い帯が、艶を決める */
       x.save();
       x.globalCompositeOperation = 'screen';
-      x.globalAlpha = 0.72;
-      x.fillStyle = rg; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      x.globalAlpha = 1;
-      /* 光の当たる向きは盤が回っても動かない。窓だけは回さない。 */
-      const win = x.createConicGradient(-spin + 2.15, 0, 0);
-      const keep = [0.00, 0.50], wid = 0.045;
-      for (let i = 0; i <= 72; i++) {
-        const t = i / 72;
-        let near = 1;
-        for (const k of keep) {
-          const d0 = Math.abs(t - k); near = Math.min(near, Math.min(d0, 1 - d0));
-        }
-        const a2 = 1 - Math.exp(-Math.pow(near / wid, 2) * 1.6);
-        win.addColorStop(t, `rgba(0,0,0,${Math.max(0, Math.min(1, a2)).toFixed(3)})`);
+      const sp1 = x.createLinearGradient(-dr, -dr, dr * 0.5, dr);
+      sp1.addColorStop(0,   'rgba(255,255,255,0)');
+      sp1.addColorStop(.40, 'rgba(255,255,255,.06)');
+      sp1.addColorStop(.50, 'rgba(255,255,255,.30)');
+      sp1.addColorStop(.56, 'rgba(255,255,255,.10)');
+      sp1.addColorStop(1,   'rgba(255,255,255,0)');
+      x.fillStyle = sp1; x.fillRect(-dr, -dr, dr * 2, dr * 2);
+      x.restore();
+      /* 縁の立ち上がり */
+      x.beginPath(); x.arc(0, 0, dr * 0.985, 0, 7);
+      x.strokeStyle = 'rgba(255,255,255,.28)'; x.lineWidth = Math.max(1, dr * 0.012); x.stroke();
+      x.beginPath(); x.arc(0, 0, dr, 0, 7);
+      x.strokeStyle = 'rgba(0,0,0,.55)'; x.lineWidth = 1; x.stroke();
+      x.restore();                                   /* 切り抜きを閉じる */
+
+      /* 盤面の円周に曲名を刷る（実物の曲目表示に相当） */
+      const ring = trackTitle(tk).toUpperCase().slice(0, 46);
+      x.save(); x.font = '600 ' + u(0.026) + 'px "Hiragino Sans",-apple-system,sans-serif';
+      x.fillStyle = 'rgba(255,255,255,.82)'; x.textAlign = 'center'; x.textBaseline = 'middle';
+      const step = Math.min(0.115, (Math.PI * 1.5) / Math.max(1, ring.length));
+      const start = -((ring.length - 1) * step) / 2;
+      for (let i = 0; i < ring.length; i++) {
+        x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.62);
+        x.fillText(ring[i], 0, 0); x.restore();
       }
-      x.globalCompositeOperation = 'destination-out';
-      x.fillStyle = win; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      /* 記録面の外だけに出る。内側の透明部と最外周には虹は無い。 */
-      const fade = x.createRadialGradient(0, 0, 0, 0, 0, dr);
-      fade.addColorStop(0,    'rgba(0,0,0,1)');
-      fade.addColorStop(.185, 'rgba(0,0,0,1)');
-      fade.addColorStop(.24,  'rgba(0,0,0,0)');
-      fade.addColorStop(.95,  'rgba(0,0,0,0)');
-      fade.addColorStop(.985, 'rgba(0,0,0,1)');
-      x.fillStyle = fade; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      x.restore();
-      x.save();
-      x.globalCompositeOperation = 'destination-over';
-      x.fillStyle = base; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      x.restore();
-    }
+      x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.restore();
 
-    /* 光の筋。斜めに走る白い帯が、艶を決める */
-    x.save(); x.beginPath(); x.arc(0, 0, dr, 0, 7); x.clip();
-    x.globalCompositeOperation = 'screen';
-    const sp1 = x.createLinearGradient(-dr, -dr, dr * 0.5, dr);
-    sp1.addColorStop(0,   'rgba(255,255,255,0)');
-    sp1.addColorStop(.40, 'rgba(255,255,255,.06)');
-    sp1.addColorStop(.50, 'rgba(255,255,255,.30)');
-    sp1.addColorStop(.56, 'rgba(255,255,255,.10)');
-    sp1.addColorStop(1,   'rgba(255,255,255,0)');
-    x.fillStyle = sp1; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-    const sp2 = x.createLinearGradient(dr, -dr, -dr * 0.6, dr);
-    sp2.addColorStop(0,   'rgba(255,255,255,0)');
-    sp2.addColorStop(.48, 'rgba(255,255,255,.12)');
-    sp2.addColorStop(.54, 'rgba(255,255,255,0)');
-    x.fillStyle = sp2; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-    x.restore();
-
-    /* 縁の立ち上がり */
-    x.beginPath(); x.arc(0, 0, dr * 0.985, 0, 7);
-    x.strokeStyle = 'rgba(255,255,255,.28)'; x.lineWidth = Math.max(1, dr * 0.012); x.stroke();
-    x.beginPath(); x.arc(0, 0, dr, 0, 7);
-    x.strokeStyle = 'rgba(0,0,0,.55)'; x.lineWidth = 1; x.stroke();
-    x.restore();
+      /* 中心。実物は 穴15mm → 透明部23mm → そこから記録面。比率をそのまま使う。 */
+      x.beginPath(); x.arc(0, 0, dr * 0.192, 0, 7);
+      const hub = x.createLinearGradient(0, -dr * 0.19, 0, dr * 0.19);
+      hub.addColorStop(0, 'rgba(150,160,175,.55)');
+      hub.addColorStop(.5, 'rgba(210,222,238,.42)');
+      hub.addColorStop(1, 'rgba(120,130,146,.55)');
+      x.fillStyle = hub; x.fill();
+      x.strokeStyle = 'rgba(255,255,255,.30)'; x.lineWidth = 1; x.stroke();
+      x.beginPath(); x.arc(0, 0, dr * 0.163, 0, 7);
+      x.strokeStyle = 'rgba(255,255,255,.22)'; x.lineWidth = Math.max(1, dr * 0.012); x.stroke();
+      x.beginPath(); x.arc(0, 0, dr * 0.150, 0, 7);
+      x.strokeStyle = 'rgba(0,0,0,.30)'; x.lineWidth = 1; x.stroke();
+      x.beginPath(); x.arc(0, 0, dr * 0.125, 0, 7);
+      x.fillStyle = 'rgba(8,9,12,.96)'; x.fill();
+      x.strokeStyle = 'rgba(255,255,255,.35)'; x.stroke();
+      x.restore();                                   /* 位置ずらしを閉じる */
+      x.beginPath(); x.arc(cx, cy, dr, 0, 7);
+      x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
     }
-    /* 盤面の円周に曲名を刷る（実物の曲目表示に相当）。レコードはラベルに刷ってある。 */
-    if (discKind === 'cd') {
-    const ring = trackTitle(tk).toUpperCase().slice(0, 46);
-    x.save(); x.font = '600 ' + u(0.026) + 'px "Hiragino Sans",-apple-system,sans-serif';
-    x.fillStyle = 'rgba(255,255,255,.82)'; x.textAlign = 'center'; x.textBaseline = 'middle';
-    /* 文字は接線に沿わせる。余計に半回転させると裏返って読めなくなる。 */
-    const step = Math.min(0.115, (Math.PI * 1.5) / Math.max(1, ring.length));
-    const start = -((ring.length - 1) * step) / 2;
-    for (let i = 0; i < ring.length; i++) {
-      x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.62);
-      x.fillText(ring[i], 0, 0); x.restore();
-    }
-    x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.restore();
-    }
-    x.save(); x.beginPath(); x.arc(0, 0, dr, 0, 7); x.clip();
-    x.lineWidth = 1;
-    for (let i = 0; i < 46; i++) {
-      const rr2 = dr * (0.33 + i * 0.0148);
-      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.055)' : 'rgba(0,0,0,.05)';
-      x.beginPath(); x.arc(0, 0, rr2, 0, 7); x.stroke();
-    }
-    x.restore();
-    /* 中心。実物は 穴15mm → 透明部23mm → そこから記録面。比率をそのまま使う。 */
-    x.beginPath(); x.arc(0, 0, dr * 0.192, 0, 7);
-    const hub = x.createLinearGradient(0, -dr * 0.19, 0, dr * 0.19);
-    hub.addColorStop(0, 'rgba(150,160,175,.55)');
-    hub.addColorStop(.5, 'rgba(210,222,238,.42)');
-    hub.addColorStop(1, 'rgba(120,130,146,.55)');
-    x.fillStyle = hub; x.fill();
-    x.strokeStyle = 'rgba(255,255,255,.30)'; x.lineWidth = 1; x.stroke();
-    /* 積み重ね用の輪（実物にある段差） */
-    x.beginPath(); x.arc(0, 0, dr * 0.163, 0, 7);
-    x.strokeStyle = 'rgba(255,255,255,.22)'; x.lineWidth = Math.max(1, dr * 0.012); x.stroke();
-    x.beginPath(); x.arc(0, 0, dr * 0.150, 0, 7);
-    x.strokeStyle = 'rgba(0,0,0,.30)'; x.lineWidth = 1; x.stroke();
-    x.beginPath(); x.arc(0, 0, dr * 0.125, 0, 7);
-    x.fillStyle = 'rgba(8,9,12,.96)'; x.fill();
-    x.strokeStyle = 'rgba(255,255,255,.35)'; x.stroke();
-    x.restore();
-    x.beginPath(); x.arc(cx, cy, dr, 0, 7);
-    x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
 
     /* ⑤ 盤の右の札。アーティストと曲名 */
     const spot = ok ? quietSpot(im, al.id) : 'br';
@@ -1915,7 +1932,7 @@ function screenNow() {
         <div class="nowq" id="nowq"></div>
       </div>
       <div class="nowname" id="vname"></div>
-      <div class="nowbar"><i id="nseek"></i></div>
+      <div class="nowbar" id="nbar"><i id="nseek"></i></div>
       <div class="nowctl">
         <button id="nprev">⏮</button><button id="nplay">▶</button><button id="nnext">⏭</button>
         <button class="hbtn" id="nq">次に流れる</button>
@@ -1923,6 +1940,7 @@ function screenNow() {
       </div>
       <div class="msg" id="nmsg"></div>
     </div>`;
+  wireSeek('nbar', 'nseek');
   const cv = $('#vcv'), ctx = cv.getContext('2d');
   const paintQ = () => {
     const q = $('#nowq'); if (!q) return;
@@ -1996,7 +2014,8 @@ function screenNow() {
     removeEventListener('resize', V.watch.f);
   }
   const onTime = () => {
-    const b = $('#nseek'); if (b && au.duration) b.style.width = (au.currentTime / au.duration * 100) + '%';
+    const b = $('#nseek');
+    if (b && au.duration && !seekDrag) b.style.width = (au.currentTime / au.duration * 100) + '%';
   };
   V.watch = { p: paint, t: onTime, f: fit };
   au.addEventListener('play', paint); au.addEventListener('pause', paint);
@@ -2380,7 +2399,7 @@ function screenCar() {
       <div class="art"><img id="cimg" alt=""></div>
       <div class="ti2" id="cti"></div>
       <div class="ar2" id="car2"></div>
-      <div class="bar2"><i id="cbar"></i></div>
+      <div class="bar2" id="cbarw"><i id="cbar"></i></div>
       <div class="ctl2">
         <button id="cprev">⏮</button>
         <button id="cplay" class="big">▶</button>
@@ -2407,6 +2426,7 @@ function screenCar() {
   V.carw = { p: paint, t: onT };
   au.addEventListener('play', paint); au.addEventListener('pause', paint);
   au.addEventListener('timeupdate', onT);
+  wireSeek('cbarw', 'cbar');
   $('#cx').onclick    = () => go('#/lib');
   $('#cplay').onclick = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(paint, 60); };
   $('#cprev').onclick = () => { prevTrack(); setTimeout(paint, 80); };
@@ -4016,7 +4036,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v70');
+  L.push('版: v71');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
