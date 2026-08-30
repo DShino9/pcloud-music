@@ -55,6 +55,13 @@ const LS = {
   del(k)    { try { localStorage.removeItem('pm.' + k); } catch (e) {} },
 };
 
+/* 入口（ds9）の下では、中継所は入口の中に同居している。
+   だから設定させない。住所が同じなので /relay で届く。
+   github.io で直に開いたときだけ、これまで通り端末の設定を見る。
+   （端末ごとに中継所を入れ直させるのが、そもそもの間違いだった） */
+const UNDER_GATE = !/(^|\.)github\.io$/.test(location.hostname);
+const RELAY_HERE = location.origin + '/relay';
+
 const S = {
   host:   LS.get('host', 'api.pcloud.com'),
   auth:   LS.get('auth', ''),
@@ -80,7 +87,7 @@ const S = {
   tryGate: LS.get('tryGate', false), // 入口ごしに音を配らせるか（既定は使わない）
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
-  relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
+  relay:  UNDER_GATE ? RELAY_HERE : LS.get('relay', ''),   // 入口の下なら同居しているものを使う
   pub:    LS.get('pub', false),     // 公開リンク経由にするか
   sweep:  null,
 };
