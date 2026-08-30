@@ -973,6 +973,14 @@ function prevTrack() {
 /* 形式が合わない・読めない、は play() の失敗ではなく要素の error に出る。 */
 au.addEventListener('error', () => {
   const e = au.error; if (!e || au.src === SILENT || probing) return;
+  /* 入口は頭の2000バイトを渡せても、続きで断られることがある（出口が変わる）。
+     そのときは黙って直の道へ切り替えて鳴らし直す。診断を出して止めない。 */
+  if (GATE && String(au.currentSrc || au.src || '').indexOf('/api/audio') >= 0) {
+    V.pipe = 'direct';
+    note('入口が途中で切れた。直の道へ切り替える');
+    const c0 = cur();
+    if (c0) { if (tapped()) foldGraph(); playAt(P.qi); return; }
+  }
   const why = { 1:'読み込みを中断した', 2:'通信が切れた', 3:'音の中身を解けない',
                 4:'この形式は再生できません' }[e.code] || ('error ' + e.code);
   const c = cur(), nm = c ? c.al.tracks[c.i].name : '';
@@ -4262,7 +4270,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v99');
+  L.push('版: v100');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4289,7 +4297,28 @@ async function selftest() {
 /* ============ ジュークボックス ============ */
 /* 選ぶこと自体を楽しむ画面。棚を「曲目札」に見立て、A1・A2… の番号で選ぶ。
    1535枚を一望する画面ではない。20枚ずつめくって、目に留まったものを押す。 */
-const JB = { page: 0, per: 20, pick: '' };
+const JB = { page: 0, per: 20, pick: '',
+             genre: LS.get('jbgenre', ''),   // ジューク側の絞り込み。棚とは分けて憶える
+             mood:  LS.get('jbmood', '') };
+
+/* ジュークに並べる盤。棚の絞り込みは持ち込まない（ここで選べるようにしたので）。 */
+function jukePool() {
+  let list = S.albums.slice();
+  if (JB.genre) list = list.filter(al => albumGenre(al) === JB.genre);
+  if (JB.mood)  list = list.filter(al => moodOf(al) === JB.mood);
+  return list.sort((SORTS[S.sort] || SORTS.artist)[1]);
+}
+
+/* 雰囲気の一覧は、実際に付いている札から起こす。
+   決め打ちの5つだけだと、手で付けた札が選べなくなる。 */
+function jukeMoodList() {
+  const m = new Map();
+  for (const al of S.albums) {
+    const k = moodOf(al); if (!k) continue;
+    m.set(k, (m.get(k) || 0) + 1);
+  }
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
 const jbCode = i => String.fromCharCode(65 + Math.floor(i / 5)) + ((i % 5) + 1);
 
 /* 演奏機構の窓。本物のジュークボックスは、掛かる盤が見えるのが値打ち。 */
@@ -4393,8 +4422,8 @@ function wireMech() {
 
 function screenJuke() {
   $('#hdr').classList.add('hide');
-  const pool = shownAlbums();
-  if (!pool.length) { toast('棚が空です'); go('#/lib'); return; }
+  const pool = jukePool();
+  if (!pool.length && !(JB.genre || JB.mood)) { toast('棚が空です'); go('#/lib'); return; }
   const pages = Math.max(1, Math.ceil(pool.length / JB.per));
   if (JB.page >= pages) JB.page = 0;
   const list = pool.slice(JB.page * JB.per, JB.page * JB.per + JB.per);
@@ -4418,6 +4447,20 @@ function screenJuke() {
             <div class="a3">${JB.page + 1} / ${pages} 面</div>
           </div>
         </div>
+        <div class="pickrow">
+          <select id="jgen">
+            <option value="">ジャンル：すべて</option>
+            ${genreList().map(([g, n]) =>
+              `<option value="${esc(g)}"${JB.genre === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}
+          </select>
+          <select id="jmood">
+            <option value="">雰囲気：すべて</option>
+            ${jukeMoodList().map(([k, n]) =>
+              `<option value="${esc(k)}"${JB.mood === k ? ' selected' : ''}>${esc(moodLabel(k))}（${n}）</option>`).join('')}
+          </select>
+          <span class="cnt">${pool.length} 枚</span>
+          ${(JB.genre || JB.mood) ? '<button class="hbtn" id="jclr">戻す</button>' : ''}
+        </div>
         <div class="rack">${list.map((al, i) => `
           <button class="strip ${c && c.al.id === al.id ? 'on' : ''}" data-j="${i}">
             <span class="code">${jbCode(i)}</span>
@@ -4437,9 +4480,15 @@ function screenJuke() {
         <button id="jrand" class="wide">おまかせ 🔀</button>
         <button id="jclose" class="wide">とじる</button>
       </div>
-      <div class="foot">札を押すとその盤が掛かります。キーボードなら A1 … D5 の番号でも選べます。</div>
+      <div class="foot">${pool.length ? '札を押すとその盤が掛かります。キーボードなら A1 … D5 の番号でも選べます。'
+                                        : 'この選び方に当てはまる盤がありません。上の二つを戻してください。'}</div>
     </div></div>`;
   wireMech();
+  const reset = () => { JB.page = 0; JB.pick = ''; screenJuke(); };
+  $('#jgen').onchange  = e => { JB.genre = e.target.value; LS.set('jbgenre', JB.genre); reset(); };
+  $('#jmood').onchange = e => { JB.mood  = e.target.value; LS.set('jbmood',  JB.mood);  reset(); };
+  const jc = $('#jclr');
+  if (jc) jc.onclick = () => { JB.genre = ''; JB.mood = ''; LS.del('jbgenre'); LS.del('jbmood'); reset(); };
   main().querySelectorAll('[data-j]').forEach(b => b.onclick = () => {
     const al = list[+b.dataset.j];
     JB.pick = jbCode(+b.dataset.j);
@@ -4451,6 +4500,7 @@ function screenJuke() {
   $('#jplay').onclick  = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(screenJuke, 120); };
   $('#jpage').onclick  = () => { JB.page = (JB.page + 1) % pages; screenJuke(); };
   $('#jrand').onclick  = () => {
+    if (!pool.length) return toast('この選び方では盤がありません');
     JB.page = Math.floor(Math.random() * pages);
     screenJuke();
     const al = pool[Math.floor(Math.random() * pool.length)];
