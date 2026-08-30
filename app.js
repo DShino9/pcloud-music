@@ -713,6 +713,23 @@ async function bytesUrl(t) {
 }
 const tapped = () => !!(V.ok && !V.tap);   /* 解析器に直結している */
 
+/* 入口が中身を渡せるか、頭だけ貰って確かめる。1秒で分かる。 */
+async function gatePeek(url, ms = 6000) {
+  const ac = new AbortController();
+  const tm = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(url, { headers: { Range: 'bytes=0-2047' },
+                                 cache: 'no-store', signal: ac.signal });
+    if (!r.ok && r.status !== 206) { note('入口が渡さない: ' + r.status); return false; }
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (ct.includes('json') || ct.includes('html')) { note('入口が中身でないものを返した: ' + ct); return false; }
+    const b = await r.arrayBuffer();
+    if (b.byteLength < 512) { note('入口の中身が短すぎる: ' + b.byteLength); return false; }
+    return true;
+  } catch (e) { note('入口を確かめられない: ' + (e.message || e)); return false; }
+  finally { clearTimeout(tm); }
+}
+
 /* 掴んで頭出し。指を離すまで表示は指について来る。 */
 let seekDrag = false;
 function wireSeek(barId, fillId) {
@@ -792,39 +809,23 @@ async function playAt(qi) {
     /* 出力から拾っているときは印を付けてはいけない。付けると次の曲が読めなくなる。 */
     au.crossOrigin = null;   /* 同じ置き場か、印なしで鳴らす道しか使わない */
     if (so.gate) {
-      /* ① 入口が中身ごと配る（fileid だけ渡す）
-         ② 端末が出したリンクを入口が取りに行って素通しする
-         ③ 端末が直に取る（鳴るが波形は出ない）
-         ①②が通れば同じ置き場になるので、許可なしで波形が出る。 */
-      const cands = [];
+      /* 入口が中身ごと配れれば同じ置き場になり、許可なしで波形が出る。
+         ただし入口は pCloud に断られることがある。音声要素で試すと1回15秒待たされ、
+         曲の変わり目が止まって見える。先に頭の千バイトだけ貰って判断する。 */
       const gp = '/api/audio?fileid=' + encodeURIComponent(t.id);
+      let gateReady = false;
       if (V.pipe !== 'direct') {
-        cands.push(['入口が配る', gp, true]);
-        cands.push(['入口が配る・二度目', gp + '&r=2', true]);   /* 断りは気まぐれなので粘る */
-        if (V.pipeDead !== 'pipe') try {
-          cands.push(['入口が中継', '/api/pipe?u=' + encodeURIComponent(await fileLink(t.id)), true]);
-        } catch (e) { note('リンクを出せない: ' + (e.message || e)); }
+        for (let k = 0; k < 2 && !gateReady; k++) gateReady = await gatePeek(gp);
       }
-      /* 端末が直に取る道だけは必ず残す。入口は pCloud に断られることがあり
-         （Cloudflare は行きと帰りで出口が変わる）、塞ぐと音楽が止まる。 */
-      try { cands.push(['端末が直に', await fileLink(t.id), false]); }
-      catch (e) { note('リンクを出せない: ' + (e.message || e)); }
-      /* 前に通った道を先頭に */
-      if (V.pipeWay) {
-        const k = cands.findIndex(c => c[0] === V.pipeWay);
-        if (k > 0) cands.unshift(cands.splice(k, 1)[0]);
-      }
-      for (const [how, u, sameOrigin] of cands) {
+      if (gateReady) {
+        src = gp; V.pipeWay = '入口が配る'; V.sameOrigin = true;
+        note('通った道: 入口が配る');
+      } else {
         try {
-          await tryLoad(u);
-          src = u; V.pipeWay = how; V.sameOrigin = sameOrigin;
-          if (!sameOrigin) V.pipe = 'direct';
-          note('通った道: ' + how);
-          break;
-        } catch (e2) {
-          note('駄目な道: ' + how);
-          if (how === '入口が中継') V.pipeDead = 'pipe';
-        }
+          const lk = await fileLink(t.id);
+          src = lk; V.sameOrigin = false; V.pipeWay = '端末が直に';
+          note('通った道: 端末が直に');
+        } catch (e) { note('リンクを出せない: ' + (e.message || e)); }
       }
       if (!src) throw new PCloudError(-9, 'どの道でも音を読めません');
       /* 外の置き場の音は、解析器に繋いだ要素だと無音になる。
@@ -4174,7 +4175,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v86');
+  L.push('版: v87');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
