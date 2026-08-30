@@ -1555,10 +1555,28 @@ const VD = {
   vinyl(x, w, h, al) { discKind = 'lp'; try { VD.art(x, w, h, al); } finally { discKind = 'cd'; } },
   art(x, w, h, al) {
     const im = coverImage(al), ok = im && im.complete && im.naturalWidth;
-    const S0 = Math.min(w, h) * 0.96;
-    const ox = (w - S0) / 2, oy = (h - S0) / 2;
+    /* 画面の形で組み方を変える。正方形に近ければ今まで通り。
+       縦長なら札を上・盤を下、横長なら札を左・盤を右で対比させる。 */
+    const AR = w / h;
+    const mode = AR > 1.28 ? 'wide' : AR < 0.82 ? 'tall' : 'sq';
+    const S0 = mode === 'sq'   ? Math.min(w, h) * 0.96
+             : mode === 'tall' ? Math.min(w * 0.94, h * 0.56)
+                               : Math.min(h * 0.94, w * 0.54);
+    const acx = mode === 'wide' ? w * 0.50 : w * 0.50;
+    const acy = mode === 'tall' ? h * 0.47 : h * 0.50;
+    const ox = acx - S0 / 2, oy = acy - S0 / 2;
     const c = cur(), tk = c && c.al === al ? c.al.tracks[c.i] : al.tracks[0];
     const u = v => S0 * v;                      /* 盤面の寸法はすべて一辺からの割合で決める */
+
+    /* 余った地は、ジャケットをぼかして敷く。黒地に浮くと寒々しい。 */
+    if (mode !== 'sq' && ok) {
+      x.save();
+      const z = Math.max(w, h) * 1.25, bx = w / 2 - z / 2, by = h / 2 - z / 2;
+      try { x.filter = 'blur(' + Math.round(Math.min(w, h) * 0.06) + 'px) brightness(0.42) saturate(0.8)'; } catch (e) {}
+      x.drawImage(im, bx, by, z, z);
+      x.restore();
+      x.fillStyle = 'rgba(8,8,12,.35)'; x.fillRect(0, 0, w, h);
+    } else if (mode !== 'sq') { x.fillStyle = '#0d0f14'; x.fillRect(0, 0, w, h); }
 
     x.save();
     const rr = Math.max(5, u(0.012));
@@ -1574,10 +1592,19 @@ const VD = {
       x.drawImage(im, dx, dy, zm, zm);
     } else { x.fillStyle = '#132436'; x.fillRect(ox, oy, S0, S0); }
 
+    /* 縦長・横長では、札と盤は絵の外に置く。切り抜いたままだと消える。 */
+    if (mode !== 'sq') {
+      x.restore();
+      x.save();
+      x.strokeStyle = 'rgba(255,255,255,.10)'; x.lineWidth = 1;
+      x.beginPath(); x.rect(ox - .5, oy - .5, S0 + 1, S0 + 1); x.stroke();
+    }
+
     /* ④ 盤 */
-    /* 左下から差し込む。ただし中心の穴が画面に入る位置に置く。
-       穴が見えないと、これが CD だと分からない。 */
-    const dr = u(0.50), cx = ox + u(0.13), cy = oy + u(0.87);
+    /* 置き場所は形で決める。穴が画面に入っていないと CD に見えない。 */
+    const dr = mode === 'sq' ? u(0.50) : Math.min(w, h) * (mode === 'tall' ? 0.30 : 0.32);
+    const cx = mode === 'sq' ? ox + u(0.13) : mode === 'tall' ? w * 0.30 : w * 0.845;
+    const cy = mode === 'sq' ? oy + u(0.87) : mode === 'tall' ? h * 0.895 : h * 0.66;
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
@@ -1774,10 +1801,12 @@ const VD = {
       x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
     }
 
-    /* ⑤ 左上の札。アーティストと曲名。場所は動かさない。 */
+    /* ⑤ 札。正方形なら絵の左上、縦長なら上、横長なら左に置く。 */
     const spot = 'tl';
-    const px = ox + u(0.04), pw = u(0.62);
-    const ph = u(0.235), py = oy + u(0.04);
+    const px = mode === 'sq' ? ox + u(0.04) : mode === 'tall' ? w * 0.05 : w * 0.035;
+    const pw = mode === 'sq' ? u(0.62)      : mode === 'tall' ? w * 0.90 : w * 0.26;
+    const ph = mode === 'sq' ? u(0.235)     : mode === 'tall' ? h * 0.135 : h * 0.25;
+    const py = mode === 'sq' ? oy + u(0.04) : mode === 'tall' ? h * 0.045 : h * 0.20;
     x.fillStyle = 'rgba(226,222,196,.93)';
     x.fillRect(px, py, pw, ph);
     x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
@@ -4395,7 +4424,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v113');
+  L.push('版: v114');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
