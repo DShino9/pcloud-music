@@ -4316,7 +4316,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v104');
+  L.push('版: v105');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4370,6 +4370,18 @@ const jbCode = i => String.fromCharCode(65 + Math.floor(i / 5)) + ((i % 5) + 1);
 /* 前面の板。木の枠に銅の輪、赤と青のネオン、真鍮の銘板。
    盤は回り、針は曲の進みに合わせて内へ寄る。ネオンはちらつく。
    絵の切り出しは使わず、全部その場で描く。 */
+/* 部品の絵があればそれを使う。無ければ描き起こしのまま。 */
+const JBIMG = {};
+function jbImg(name) {
+  if (JBIMG[name] !== undefined) return JBIMG[name];
+  const im = new Image();
+  JBIMG[name] = im;
+  im.onerror = () => { JBIMG[name] = null; };
+  im.src = './img/' + name + '.png';
+  return im;
+}
+const jbReady = im => !!(im && im.complete && im.naturalWidth);
+
 function wireFront() {
   const cv = $('#jbfront'); if (!cv) return;
   const x = cv.getContext('2d');
@@ -4389,6 +4401,9 @@ function wireFront() {
     const u = Math.min(w, h);
     const c = cur(), playing = c && !au.paused;
     const prog = (au.duration ? au.currentTime / au.duration : 0) || 0;
+
+    const panel = jbImg('panel');
+    if (jbReady(panel)) { drawFrontImg(x, w, h, u, panel, t0, noise); requestAnimationFrame(step); return; }
 
     /* 木の台 */
     const wood = x.createLinearGradient(0, 0, 0, h);
@@ -4557,6 +4572,102 @@ function wireFront() {
     requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/* 部品の絵で組む。板は中央が抜けているので、盤を先に敷いてから板を載せる。 */
+function drawFrontImg(x, w, h, u, panel, t0, noise) {
+  const c = cur(), playing = c && !au.paused;
+  const prog = (au.duration ? au.currentTime / au.duration : 0) || 0;
+  /* 板は正方形。画面に収まる最大の正方形で置く */
+  const S0 = Math.min(w, h), px = (w - S0) / 2, py = (h - S0) / 2;
+  const cx = px + S0 / 2, cy = py + S0 / 2;
+  const HOLE = 0.585;                       /* 板の穴の直径（板の幅に対する割合） */
+  const R = S0 * HOLE / 2;
+
+  x.fillStyle = '#140c07'; x.fillRect(0, 0, w, h);
+
+  /* ① 盤。板の穴に収まる大きさで回す */
+  x.save(); x.translate(cx, cy); x.rotate(spin);
+  x.beginPath(); x.arc(0, 0, R, 0, 7);
+  const vb = x.createRadialGradient(-R * .3, -R * .3, R * .05, 0, 0, R);
+  vb.addColorStop(0, '#2b2a2b'); vb.addColorStop(.5, '#161516'); vb.addColorStop(1, '#0a0a0b');
+  x.fillStyle = vb; x.fill();
+  for (let i = 0; i < 150; i++) {
+    x.beginPath(); x.arc(0, 0, R * (0.36 + i * 0.00426), 0, 7);
+    x.strokeStyle = i % 2 ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.45)';
+    x.lineWidth = 1; x.stroke();
+  }
+  const LR = R * 0.34;
+  x.save(); x.beginPath(); x.arc(0, 0, LR, 0, 7); x.clip();
+  x.fillStyle = '#efe6d2'; x.fillRect(-LR, -LR, LR * 2, LR * 2);
+  const lim = c ? coverImage(c.al) : null;
+  if (lim && lim.complete && lim.naturalWidth) {
+    x.save();
+    try { x.filter = 'grayscale(70%) sepia(35%) brightness(1.05)'; } catch (e) {}
+    x.globalAlpha = 0.88; x.drawImage(lim, -LR, -LR, LR * 2, LR * 2);
+    x.restore();
+  }
+  x.fillStyle = 'rgba(250,244,232,.72)'; x.fillRect(-LR, -LR * 0.34, LR * 2, LR * 0.68);
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  let fs = LR * 0.30;
+  const nm = c ? cleanName(c.al.name) : '音楽棚';
+  x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
+  while (x.measureText(nm).width > LR * 1.7 && fs > LR * 0.14) {
+    fs *= 0.9; x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
+  }
+  x.fillStyle = '#2a1c10'; x.fillText(nm, 0, -LR * 0.10);
+  x.font = (LR * 0.20) + 'px "Hiragino Sans",-apple-system,sans-serif';
+  x.fillStyle = 'rgba(60,40,24,.9)';
+  x.fillText((c ? (artistOf(c.al) || '') : '').slice(0, 14), 0, LR * 0.28);
+  x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  x.restore();
+  x.beginPath(); x.arc(0, 0, LR, 0, 7);
+  x.strokeStyle = 'rgba(0,0,0,.45)'; x.lineWidth = 1; x.stroke();
+  x.beginPath(); x.arc(0, 0, R * 0.028, 0, 7); x.fillStyle = '#0b0a0c'; x.fill();
+  x.restore();
+
+  /* ② 板を載せる */
+  x.drawImage(panel, px, py, S0, S0);
+  /* ネオンのちらつき。明るいところほど効くので、重ねるだけで光って見える */
+  const f = noise(t0, 1);
+  x.save();
+  x.globalCompositeOperation = 'screen';
+  x.globalAlpha = 0.10 + f * 0.22;
+  x.drawImage(panel, px, py, S0, S0);
+  x.restore();
+  if (f < 0.16) {                            /* たまに落ちる */
+    x.save(); x.globalCompositeOperation = 'multiply'; x.globalAlpha = 0.35;
+    x.drawImage(panel, px, py, S0, S0); x.restore();
+  }
+
+  /* ③ 腕。支点は板の右上。曲の進みに合わせて内へ寄る */
+  const arm = jbImg('arm');
+  if (jbReady(arm)) {
+    const AW = S0 * 0.46, AH = AW * (arm.naturalHeight / arm.naturalWidth);
+    const ax = cx + R * 0.98, ay = cy - R * 0.86;
+    const a0 = playing ? (0.72 + prog * 0.34) : 0.38;
+    x.save(); x.translate(ax, ay); x.rotate(a0 + Math.PI * 0.5);
+    /* 絵の支点は左端の少し内側 */
+    x.drawImage(arm, -AW * 0.12, -AH / 2, AW, AH);
+    x.restore();
+  }
+
+  /* ④ 銘板。文字はこちらで書く */
+  const plate = jbImg('plate');
+  if (jbReady(plate)) {
+    const PW = S0 * 0.34, PH = PW * (plate.naturalHeight / plate.naturalWidth);
+    const bx = cx - PW / 2, by = py + S0 * 0.022;
+    x.drawImage(plate, bx, by, PW, PH);
+    x.fillStyle = '#3a2a12'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    let ps = PH * 0.42;
+    const txt = '音 楽 棚';
+    x.font = '600 ' + ps + 'px Georgia,"Hiragino Mincho ProN",serif';
+    while (x.measureText(txt).width > PW * 0.84 && ps > 6) {
+      ps *= 0.92; x.font = '600 ' + ps + 'px Georgia,"Hiragino Mincho ProN",serif';
+    }
+    x.fillText(txt, cx, by + PH / 2);
+    x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  }
 }
 
 function screenJuke() {
