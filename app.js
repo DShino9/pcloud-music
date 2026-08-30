@@ -20,7 +20,8 @@ async function gate(path) {
 }
 /* 古い入口には符号を渡す口が無い。その場合は入口に代わりに叩いてもらう。
    貼り替えを頼まなくても、新旧どちらでも動くようにしておく。 */
-let oldGate = false;
+let oldGate = false;      /* 符号を渡す口が無い（棚とリンクは代わりに叩いてもらえる） */
+let gateApi = null;       /* 入口に音楽用の口があるか。null=未確認 false=無い */
 
 const AUDIO_EXT = new Set(['mp3','m4a','aac','flac','wav','ogg','opus','aiff','aif','wma','m4b']);
 const IMAGE_EXT = new Set(['jpg','jpeg','png','webp','gif']);
@@ -163,6 +164,7 @@ async function api(method, params = {}, host, ms = 25000) {
    耳読が Mac 無しで鳴るのはこの道を通っているから。 */
 let memCode = null;      /* 入口からもらった符号。保存しない。閉じれば消える。 */
 async function getCode(force) {
+  if (gateApi === false) throw new PCloudError(-13, 'この入口に音楽用の口がありません');
   if (oldGate) throw new PCloudError(-11, '古い入口（符号を渡す口が無い）');
   if (memCode && !force) return memCode;
   if (force) memCode = null;
@@ -178,16 +180,33 @@ async function getCode(force) {
   return memCode;
 }
 async function apiPub(method, params = {}, ms = 25000) {
-  /* 古い入口のとき（符号を貰えないとき）は、入口に代わりに叩いてもらう。 */
-  if (GATE && oldGate) return apiViaGate(method, params);
+  /* 入口には三通りある。
+       ① 音楽用の口がある      → 符号を貰って自分で叩く
+       ② 古い口だけある        → 入口に代わりに叩いてもらう
+       ③ 口が無い（別の入口）  → 端末に控えた符号で叩く
+     どれかは開いてみないと分からないので、駄目なら次へ落ちる。 */
   let cd;
-  if (GATE) {
-    try { cd = await getCode(); }
-    catch (e) {
-      if (oldGate) return apiViaGate(method, params);
-      throw e;
+  if (GATE && gateApi !== false) {
+    if (oldGate) {
+      try { return await apiViaGate(method, params); }
+      catch (e) { if (e.http === 404) { gateApi = false; note('入口に音楽用の口が無い。端末の符号で叩く'); } else throw e; }
+    } else {
+      try { cd = await getCode(); }
+      catch (e) {
+        if (oldGate) {
+          try { return await apiViaGate(method, params); }
+          catch (e2) { if (e2.http === 404) { gateApi = false; note('入口に音楽用の口が無い。端末の符号で叩く'); } else throw e2; }
+        } else if (e.http === 404) { gateApi = false; note('入口に音楽用の口が無い。端末の符号で叩く'); }
+        else throw e;
+      }
     }
-  } else cd = { code: S.code, linkpw: S.linkpw };
+  }
+  if (!cd) {
+    if (!S.code) throw new PCloudError(-14,
+      'この入口には音楽用の口がありません。⋯ →「共有リンク」に符号を入れるか、'
+      + 'dshino9.github.io/pcloud-music/ から開いてください');
+    cd = { code: S.code, linkpw: S.linkpw };
+  }
   const u = new URL('https://' + S.host + '/' + method);
   u.searchParams.set('code', cd.code);
   if (cd.linkpw) u.searchParams.set('linkpassword', cd.linkpw);
@@ -4160,7 +4179,8 @@ function screenMenu() {
       <button class="row" id="rescan"><span class="nm">棚を読み直す</span><span class="sub">${S.albums.length} アルバム</span></button>
       <button class="row" id="sweep"><span class="nm">ジャケットを一巡して探す</span><span class="sub">${c} 枚</span></button>
       <button class="row" id="sweepall"><span class="nm">自動で付けた分を探し直す</span></button>
-      ${GATE ? `<button class="row" id="leave"><span class="nm">この端末を外す</span><span class="sub">合言葉を入れ直すまで</span></button>` : `<button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>`}
+      ${GATE ? `<button class="row" id="leave"><span class="nm">この端末を外す</span><span class="sub">合言葉を入れ直すまで</span></button>` : ''}
+      ${(!GATE || gateApi === false) ? `<button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}${gateApi === false ? '・この入口には音楽用の口が無いので、ここに入れると動きます' : ''}</span></button>` : ''}
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
       <button class="row" id="gatetry"><span class="nm">入口ごしに音を配らせる</span><span class="sub">${S.tryGate ? '試す' : '使わない（既定）'}・波形が許可なしで出る代わりに不安定</span></button>
@@ -4663,9 +4683,9 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v120');
+  L.push('版: v121');
   if (GATE) { try { L.push('入口の口: ' + (await gatePorts()).join(' / ')); } catch (e) {} }
-  L.push('入口の型: ' + (oldGate ? '古い（代わりに叩いてもらう）' : '新しい（符号を受け取る）'));
+  L.push('入口の型: ' + (gateApi === false ? '音楽用の口が無い（端末の符号で叩く）' : oldGate ? '古い' : '新しい') + ' / 内訳: ' + (oldGate ? '古い（代わりに叩いてもらう）' : '新しい（符号を受け取る）'));
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
