@@ -5,10 +5,18 @@
  *   リンクは getfilelink でも公開リンクの符号でも取れるが、どちらの配信元も
  *   Access-Control-Allow-Origin が無いので、ブラウザの JavaScript は中身を掴めない。
  *   （<audio src> は CORS 無しで鳴らせる。中身をプログラムに渡すときだけ困る）
- *   api ホストの file_open は CORS が開いているが、result 2003 で使えなかった。
- *   → あいだに一枚はさむしかない。それがこれ。
+ *   → あいだに一枚はさむと、頭出しの効く速い道になる。それがこれ。
  *
  * fileid を選ばないので、棚もの全部で1台を使い回せる。
+ *
+ * これは必須ではない（2026-08-30 追記）:
+ *   api ホストの file_open / file_read は CORS が開いていて、ブラウザから直に読める。
+ *   丸ごと読むぶん遅く、頭出しも効かないが、中継所ゼロで届く。
+ *   pcloud.js の fetchFile が、ここが落ちていれば自動でそちらへ降りる。
+ *   （以前ここに「file_open は 2003 で使えなかった」と書いてあったが、
+ *     flags:0 と fileid の組み合わせで通る。pcloud.js の readFile が正しい）
+ *
+ * 立て方は wrangler.toml の頭に書いてある（npx wrangler deploy）。
  *
  *
  *   /audio?fileid=…&auth=…        中身を流す（頭出しに対応）

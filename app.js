@@ -7,7 +7,14 @@ const $  = s => document.querySelector(s);
 const main = () => $('#main');
 /* 入口（worker）から配られているときは、pCloud の秘密はこちらに降りてこない。
    一覧も曲の場所も入口に頼む。github.io から直接開いたときは従来どおり。 */
-const GATE = !/(^|\.)github\.io$/.test(location.hostname) && location.protocol === 'https:';
+/* gate.js（音楽用の口＝/api/… を配る入口）の後ろにいるか。
+   「github.io でなければ gate.js」と決め打ちしていたが、いまは別の入口（棚の入口）も
+   ある。そちらは /api/… を持たないので、探しに行くと全部 404 になり
+   「音楽用の口がありません」で止まる（実際そうなった）。
+   別の入口は自分で window.__DS9 を名乗るので、それを見て譲る。 */
+const GATE = !/(^|\.)github\.io$/.test(location.hostname)
+  && location.protocol === 'https:'
+  && !window.__DS9;
 async function gate(path) {
   const r = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
   const j = await r.json().catch(() => ({}));
