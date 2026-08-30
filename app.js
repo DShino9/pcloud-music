@@ -3424,7 +3424,7 @@ function screenTriage() {
     $('#back').onclick = () => go('#/lib');
     return;
   }
-  const page = list.slice(0, 24);
+  const page = list.slice(0, 18);
   main().innerHTML = `
     <div class="libbar"><div class="row1">
       <span style="color:var(--dim);font-size:12px">残り ${list.length} 枚</span>
@@ -3436,9 +3436,10 @@ function screenTriage() {
         <img loading="lazy" src="${esc(coverOf(al))}">
         <div class="tn">${esc(cleanName(al.name))}</div>
         <div class="ta">${esc(artistOf(al) || '')} · ${al.tracks.length}曲</div>
+        <div class="alt" data-alt="${al.id}"></div>
         <div class="tb">
           <button class="ok" data-ok="${al.id}">○ 合う</button>
-          <button class="ng" data-ng="${al.id}">× 違う</button>
+          <button class="ng" data-ng="${al.id}">他を見る</button>
         </div>
       </div>`).join('')}</div>`;
   const drop = id => {
@@ -3452,6 +3453,31 @@ function screenTriage() {
     saveCovers(); drop(id);
   });
   main().querySelectorAll('[data-ng]').forEach(b => b.onclick = () => go('#/cover/' + b.dataset.ng));
+  /* 見えた札だけ、別の候補を後ろで取ってくる。18枚ぶんを一度に引くと待たされる。 */
+  const io = new IntersectionObserver(async es => {
+    for (const e of es) {
+      if (!e.isIntersecting) continue;
+      const box = e.target; io.unobserve(box);
+      const al = S.albums.find(a => String(a.id) === String(box.dataset.alt));
+      if (!al) continue;
+      box.innerHTML = '<span class="an">ほかを探しています…</span>';
+      let cs = [];
+      try { cs = await findCandidates(albumQuery(al), al, false); } catch (err) {}
+      if (!document.body.contains(box)) continue;
+      const now = (S.covers[al.id] || {}).url;
+      cs = cs.filter(c => c.url && c.url !== now).slice(0, 3);
+      if (!cs.length) { box.innerHTML = '<span class="an">ほかに候補なし</span>'; continue; }
+      box.innerHTML = '<span class="an">ほかの候補</span>' + cs.map((c, k) =>
+        `<img data-pick="${k}" src="${esc(artUrl(c.url, 200))}" title="${esc(c.label || '')}">`).join('');
+      box.querySelectorAll('[data-pick]').forEach(im => im.onclick = () => {
+        const c = cs[+im.dataset.pick];
+        S.covers[al.id] = { url: c.url, src: c.src || '', q: albumQuery(al),
+                            manual: true, sure: true, score: c.score || 0.9 };
+        saveCovers(); toast('差し替えました'); drop(al.id);
+      });
+    }
+  }, { rootMargin: '200px' });
+  main().querySelectorAll('[data-alt]').forEach(b => io.observe(b));
   $('#allok').onclick = () => {
     page.forEach(al => { S.covers[al.id] = Object.assign({}, S.covers[al.id], { sure: true, manual: true }); });
     saveCovers(); toast(page.length + ' 枚を確かにしました'); screenTriage();
@@ -4262,7 +4288,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v96');
+  L.push('版: v97');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
