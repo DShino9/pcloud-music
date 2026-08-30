@@ -2083,6 +2083,10 @@ async function diagnoseGate(t) {
   const mime = { mp3:'audio/mpeg', m4a:'audio/mp4', flac:'audio/flac', wav:'audio/wav',
                  ogg:'audio/ogg', opus:'audio/ogg', wma:'audio/x-ms-wma', aac:'audio/aac' }[ext];
   if (mime) L.push('この形式（' + ext + '）を鳴らせるか: ' + (el.canPlayType(mime) || 'いいえ'));
+  if (au.error) L.push('音の側: error ' + au.error.code);
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    L.push('★横取り役がまだ居ます');
+  }
   note('入口診断: ' + L.join(' / '));
   shout('入口', L.join('  /  '));
 }
@@ -2415,7 +2419,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v33');
+  L.push('版: v34');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
@@ -2430,8 +2434,19 @@ async function selftest() {
 
 /* ============ 起動 ============ */
 note('画面を開いた（' + (location.hash || 'ハッシュなし') + '）');
+/* Service Worker はやめた。同じ置き場への要求を横取りする性質が、
+   音（部分取得）と相性が悪く、古いものが居座ると原因が見えなくなる。
+   曲のオフライン保存は Cache Storage を自分で扱っているので影響しない。
+   居座っているものは見つけ次第そのまま外す。 */
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  navigator.serviceWorker.getRegistrations().then(rs => {
+    if (!rs.length) return;
+    Promise.all(rs.map(r => r.unregister())).then(() => {
+      caches.keys().then(ks => Promise.all(
+        ks.filter(k => k.indexOf('shell') === 0 || k.indexOf('portal') === 0).map(k => caches.delete(k))
+      )).then(() => { note('古い横取り役を外した: ' + rs.length); location.reload(); });
+    });
+  }).catch(() => {});
 }
 LS.del('link'); LS.del('cors');   /* 前の版が残した判定は捨てる */
 renderRoute();
