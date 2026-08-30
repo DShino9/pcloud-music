@@ -2231,7 +2231,17 @@ async function screenCover(id) {
       <div class="chips">${chips.map((c, i) =>
         `<button class="hbtn" data-c="${i}">${esc(c[0])}</button>`).join('')}</div>
       <div class="searchrow"><input id="q" value="${esc(q)}"><button class="hbtn" id="rs">探す</button></div>
-      <input id="url" placeholder="画像のURLを貼る" style="width:100%;margin-top:8px;padding:10px 12px;border-radius:10px;background:#0c0c10;border:1px solid var(--line);color:var(--fg)">
+      <div class="chips" style="margin-top:10px">
+        <span style="color:var(--dim);font-size:12px;align-self:center;margin-right:2px">外で探す：</span>
+        <button class="hbtn" data-web="g">Google 画像</button>
+        <button class="hbtn" data-web="a">Amazon</button>
+        <button class="hbtn" data-web="y">Yahoo 画像</button>
+      </div>
+      <div id="drop" class="drop">
+        画像をここに<b>ドラッグ</b>、または <b>⌘V で貼り付け</b><br>
+        <span class="sub">画像そのものでも、画像のURLでも構いません</span>
+      </div>
+      <input id="url" placeholder="画像のURLを直接貼る" style="width:100%;margin-top:8px;padding:10px 12px;border-radius:10px;background:#0c0c10;border:1px solid var(--line);color:var(--fg)">
       <input id="file" type="file" accept="image/*" class="hide">
       ${loading ? '<div class="empty">探しています…</div>' : `
       <div class="cands">${cands.map((c, i) => `
@@ -2267,6 +2277,78 @@ async function screenCover(id) {
       const v = $('#url').value.trim();
       if (/^https?:\/\//.test(v)) { put(v, '手動'); go('#/album/' + al.id); }
     };
+    /* 外の検索を開く。見つけた絵は「コピー」して ⌘V、またはここへドラッグ。 */
+    const q2 = encodeURIComponent((cleanName(al.artist) + ' ' + cleanName(al.name)).trim());
+    const webs = {
+      g: 'https://www.google.com/search?tbm=isch&q=' + q2,
+      a: 'https://www.amazon.co.jp/s?i=popular&k=' + q2,
+      y: 'https://search.yahoo.co.jp/image/search?p=' + q2,
+    };
+    main().querySelectorAll('[data-web]').forEach(b => b.onclick = () => {
+      window.open(webs[b.dataset.web], '_blank', 'noopener');
+    });
+
+    /* 画像そのものを受け取る道を3つ用意する。どれでも同じ結果になる。 */
+    const useBlobOrUrl = src => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => {
+        const n2 = 500, cv2 = document.createElement('canvas');
+        cv2.width = cv2.height = n2;
+        const g2 = cv2.getContext('2d');
+        const sd = Math.min(im.width, im.height);
+        g2.drawImage(im, (im.width - sd) / 2, (im.height - sd) / 2, sd, sd, 0, 0, n2, n2);
+        let out;
+        try { out = cv2.toDataURL('image/jpeg', 0.84); }
+        catch (e) { out = src; }        /* 読めない絵はURLのまま使う */
+        put(out, '手動');
+        go('#/album/' + al.id);
+      };
+      im.onerror = () => {
+        /* 縮められない絵（別の場所のもの）は、URL のまま使う */
+        if (/^https?:/.test(src)) { put(src, '手動'); go('#/album/' + al.id); }
+        else toast('その画像は読めません');
+      };
+      im.src = src;
+    };
+    const fromFile = f => {
+      const r2 = new FileReader();
+      r2.onload = () => useBlobOrUrl(r2.result);
+      r2.readAsDataURL(f);
+    };
+    const dz = $('#drop');
+    ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => {
+      e.preventDefault(); dz.classList.add('on');
+    }));
+    ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => {
+      e.preventDefault(); dz.classList.remove('on');
+    }));
+    dz.addEventListener('drop', e => {
+      const dt = e.dataTransfer;
+      const f = dt.files && dt.files[0];
+      if (f && /^image\//.test(f.type)) return fromFile(f);
+      const uri = dt.getData('text/uri-list') || dt.getData('text/plain');
+      if (uri && /^https?:/.test(uri.trim())) return useBlobOrUrl(uri.trim());
+      const html = dt.getData('text/html');
+      const m2 = html && html.match(/<img[^>]+src="([^"]+)"/i);
+      if (m2) return useBlobOrUrl(m2[1]);
+      toast('画像として受け取れませんでした');
+    });
+    dz.onclick = () => $('#file').click();
+    const onPaste = e => {
+      const items = (e.clipboardData || {}).items || [];
+      for (const it of items) {
+        if (it.type && it.type.startsWith('image/')) { fromFile(it.getAsFile()); e.preventDefault(); return; }
+      }
+      const txt = (e.clipboardData || {}).getData ? e.clipboardData.getData('text') : '';
+      if (txt && /^https?:\/\/\S+$/.test(txt.trim()) && e.target.id !== 'url' && e.target.id !== 'q') {
+        useBlobOrUrl(txt.trim()); e.preventDefault();
+      }
+    };
+    document.removeEventListener('paste', window.__onPaste || (() => {}));
+    window.__onPaste = onPaste;
+    document.addEventListener('paste', onPaste);
+
     $('#pick').onclick = () => $('#file').click();
     $('#file').onchange = e => {
       const f = e.target.files && e.target.files[0]; if (!f) return;
@@ -2874,7 +2956,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v48');
+  L.push('版: v49');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
