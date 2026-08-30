@@ -148,6 +148,25 @@ const relayUrl = (relay, o) =>
   (o.pub ? '&pub=1' : '') +
   '&auth=' + encodeURIComponent(o.auth);
 
+/* 中継所ごしに中身を取る。
+   直リンクは「要求元に縛られている」ことがあり、pCloud が渡してくれない
+   （中継所が 502 と「直リンク」を返す）。そのときは公開リンク経由に降りる。
+   中継所は両方の道を持っているので、こちらが順に頼めばよい。 */
+async function fetchFile(relay, o, onProgress, expect) {
+  let first = null;
+  for (const pub of [false, true]) {
+    try {
+      return await download(relayUrl(relay, { ...o, pub }), onProgress, expect);
+    } catch (e) {
+      if (!first) first = e;
+      /* 直リンクで駄目だったときだけ、公開リンクを試す価値がある。 */
+      if (pub) throw new PCloudError(-11,
+        first.message + '（直リンクも公開リンクも駄目でした）');
+    }
+  }
+  throw first;
+}
+
 async function relayAlive(relay) {
   const r = await fetch(String(relay).replace(/\/+$/, '') + '/', { referrerPolicy: 'no-referrer' });
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -313,7 +332,7 @@ root.PCloud = {
   VERSION: '1',
   HOSTS, nfc, sha1hex, PCloudError,
   store, logger, api, login,
-  relayUrl, relayAlive, indexFolder, shelfCache, download,
+  relayUrl, relayAlive, indexFolder, shelfCache, download, fetchFile,
   ensureFolder, uploadFile, deleteFile, readFile,
 };
 
