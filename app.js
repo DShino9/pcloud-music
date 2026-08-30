@@ -619,6 +619,11 @@ function trackSheet(al, i) {
   const t = al.tracks[i], fav = isFav('t' + t.id);
   sheet({ name: trackTitle(t), sub: [al.artist, al.name].filter(Boolean).join(' — '), cover: coverOf(al) },
     [['▶', '今すぐ再生', () => play(al, i)],
+     ['🌙', 'この曲の雰囲気で流す', () => {
+        const g = tmoodOf(al, i);
+        if (!g || !g.length) { toast('この曲の雰囲気はまだ分かっていません', 3500); return; }
+        playByTags(g, { al, i });
+      }],
      ['⤵', '次に再生', () => enqueueNext([{ al, i }])],
      ['＋', '列の最後に追加', () => enqueueEnd([{ al, i }])],
      [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
@@ -2782,6 +2787,104 @@ function moodQueue(seed, n = 60) {
   return out;
 }
 
+/* ============ 曲ごとの雰囲気 ============ */
+/* AcousticBrainz は、録音1件ごとに「明るい・切ない・激しい・穏やか・賑やか・
+   踊れる・歌なし」を確率で持っている。鍵も要らない。
+   MusicBrainz で曲を突き止めてから拾ったものを、索引にして配ってある。 */
+const TAGS = ['明るい','切ない','激しい','穏やか','賑やか','電子','踊れる','明るい音','暗い音','歌なし'];
+const tkey = s2 => String(s2 || '').toLowerCase()
+  .replace(/[^0-9a-z\u3040-\u30ff\u4e00-\u9fff]+/g, '');
+let TMOOD = null, tmoodIdx = null;
+async function loadTMood() {
+  if (TMOOD) return TMOOD;
+  try {
+    const r = await fetch('./雰囲気.json', { cache: 'no-cache' });
+    if (!r.ok) throw new Error(String(r.status));
+    TMOOD = await r.json();
+  } catch (e) { TMOOD = { byPath: {} }; note('曲の雰囲気を読めない: ' + (e.message || e)); }
+  return TMOOD;
+}
+/* 曲名で突き合わせる。合わなければ並び順で当てる（盤によっては題が違う）。 */
+function tmoodOf(al, i) {
+  if (!TMOOD) return null;
+  const e = TMOOD.byPath[pathKey(al)];
+  if (!e || !e.ok) return null;
+  const t = al.tracks[i];
+  if (!t) return null;
+  const k = tkey(trackTitle(t));
+  let hit = e.tracks.find(x => x.k === k);
+  if (!hit && k) hit = e.tracks.find(x => x.k.includes(k) || k.includes(x.k));
+  if (!hit && e.tracks.length === al.tracks.length) hit = e.tracks[i];
+  return hit ? hit.g : null;
+}
+/* 札の付いた曲を、棚ぜんぶから集める。 */
+function allTagged() {
+  if (tmoodIdx) return tmoodIdx;
+  tmoodIdx = [];
+  if (!TMOOD) return tmoodIdx;
+  for (const al of S.albums) {
+    const e = TMOOD.byPath[pathKey(al)];
+    if (!e || !e.ok) continue;
+    for (let i = 0; i < al.tracks.length; i++) {
+      const g = tmoodOf(al, i);
+      if (g && g.length) tmoodIdx.push({ al, i, g });
+    }
+  }
+  return tmoodIdx;
+}
+/* 「この曲の雰囲気で流す」。札の重なりが多いものほど先に来る。 */
+function tagQueue(tags, n = 80, skip = null) {
+  const want = new Set(tags);
+  const pool = allTagged().filter(x =>
+    !(skip && x.al.id === skip.al.id && x.i === skip.i) && x.g.some(t => want.has(t)));
+  const scored = pool.map(x => {
+    const hit = x.g.filter(t => want.has(t)).length;
+    return { x, sc: hit + (hit / Math.max(1, x.g.length)) * 0.6 + Math.random() * 0.9 };
+  }).sort((a, b) => b.sc - a.sc);
+  const out = [];
+  let last = null;
+  for (const { x } of scored) {
+    if (out.length >= n) break;
+    const a2 = artistOf(x.al) || x.al.name;
+    if (a2 === last) continue;                 /* 同じ人が続くと飽きる */
+    last = a2;
+    out.push({ al: x.al, i: x.i });
+  }
+  return out;
+}
+function playByTags(tags, seed) {
+  if (!TMOOD) { toast('雰囲気の索引をまだ読めていません', 3000); return; }
+  const q = tagQueue(tags, 80, seed);
+  if (!q.length) { toast('その雰囲気の曲が見つかりません', 3000); return; }
+  startQueue((seed ? [seed] : []).concat(q), 0);
+  go('#/queue');
+}
+/* 札ごとの曲を並べる画面 */
+function screenTag(tag) {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = tag;
+  $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.add('hide');
+  const list = allTagged().filter(x => x.g.includes(tag)).slice(0, 600);
+  main().innerHTML = `<div class="libbar"><div class="row1">
+      <button class="hbtn" id="ptag">▶ この雰囲気で流す</button>
+      <span style="color:var(--dim);font-size:12px">${list.length} 曲</span>
+    </div></div>
+    <div id="tlist">${list.map((x, k) => `
+      <button class="hit2" data-k="${k}">
+        ${coverOf(x.al) ? `<img loading="lazy" src="${esc(coverOf(x.al))}">`
+                        : `<img alt="" style="${madeCover(x.al)}">`}
+        <span class="t2"><span class="n2">${esc(trackTitle(x.al.tracks[x.i]))}</span>
+          <span class="a2">${esc(artistOf(x.al) || '')} · ${esc(cleanName(x.al.name))}
+            <span style="color:var(--dim2,#6a6a7a)">　${esc(x.g.join('・'))}</span></span></span>
+      </button>`).join('') || '<div class="empty">まだありません</div>'}</div>`;
+  $('#ptag').onclick = () => { if (list.length) startQueue(shuffle(list.map(x => ({ al: x.al, i: x.i }))), 0); };
+  $('#tlist').querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
+    const x = list[+b.dataset.k];
+    startQueue([{ al: x.al, i: x.i }].concat(tagQueue(x.g, 60, x)), 0);
+  });
+  $('#back').onclick = () => go('#/moods');
+}
+
 /* 掘る。1535枚を上から眺めるのは無理なので、まとまりから入る。 */
 function keyOf(kind, al) {
   return kind === 'artist' ? artistOf(al)
@@ -2818,6 +2921,7 @@ function screenBrowse(kind) {
       </div>
       <div class="srch"><input id="bq" placeholder="${{artist:'アーティストを絞る',genre:'ジャンルを絞る',mood:'雰囲気を絞る'}[kind]}"
         autocapitalize="off"></div></div>
+    ${kind === 'mood' ? `<div id="tagrow" class="tagrow"></div>` : ''}
     <div id="blist"></div>
     ${kind === 'genre' && none ? `<div class="note" style="padding:12px 2px 0">
       ジャンルが入っていないものが ${none} 枚あります。⋯ →「ジャンルと年代を集める」で埋まります。</div>` : ''}`;
@@ -2837,6 +2941,26 @@ function screenBrowse(kind) {
   let t2 = null;
   $('#bq').oninput = () => { clearTimeout(t2); t2 = setTimeout(draw, 140); };
   draw(); wireTabs();
+  if (kind === 'mood') drawTagRow();
+}
+/* アルバム単位の雰囲気とは別に、曲ごとの札でも掘れるようにする。 */
+async function drawTagRow() {
+  const el = $('#tagrow'); if (!el) return;
+  el.innerHTML = '<span class="tnote">曲ごとの雰囲気を読んでいます…</span>';
+  await loadTMood(); tmoodIdx = null;
+  const all = allTagged();
+  if (!$('#tagrow')) return;
+  if (!all.length) {
+    $('#tagrow').innerHTML = '<span class="tnote">曲ごとの雰囲気はまだ集め終わっていません</span>';
+    return;
+  }
+  const cnt = {};
+  for (const x of all) for (const g of x.g) cnt[g] = (cnt[g] || 0) + 1;
+  const av = TAGS.filter(t => cnt[t]);
+  $('#tagrow').innerHTML = '<span class="tnote">曲ごと（' + all.length + ' 曲）</span>' +
+    av.map(t => `<button class="tchip" data-t="${esc(t)}">${esc(t)}<b>${cnt[t]}</b></button>`).join('');
+  $('#tagrow').querySelectorAll('[data-t]').forEach(b =>
+    b.onclick = () => go('#/tag/' + encodeURIComponent(b.dataset.t)));
 }
 function screenBy(kind, key) {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
@@ -3422,6 +3546,7 @@ function routeTo() {
   if (h === '#/artists')         return screenBrowse('artist');
   if (h === '#/genres')          return screenBrowse('genre');
   if (h === '#/moods')           return screenBrowse('mood');
+  if (h.startsWith('#/tag/'))    return screenTag(decodeURIComponent(h.slice(6)));
   if (h.startsWith('#/by/mood/'))   return screenBy('mood',   decodeURIComponent(h.slice(10)));
   if (h.startsWith('#/by/artist/')) return screenBy('artist', decodeURIComponent(h.slice(12)));
   if (h.startsWith('#/by/genre/'))  return screenBy('genre',  decodeURIComponent(h.slice(11)));
@@ -3812,7 +3937,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v68');
+  L.push('版: v69');
+  L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
