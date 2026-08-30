@@ -4334,7 +4334,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v108');
+  L.push('版: v109');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4396,7 +4396,7 @@ function jbImg(name) {
   const im = new Image();
   JBIMG[name] = im;
   im.onerror = () => { JBIMG[name] = null; };
-  im.src = './img/' + name + '.webp?v=2';
+  im.src = './img/' + name + '.webp?v=3';
   return im;
 }
 const jbReady = im => !!(im && im.complete && im.naturalWidth);
@@ -4601,7 +4601,7 @@ function drawFrontImg(x, w, h, u, panel, t0, noise) {
   const S0 = Math.min(w, h), px = (w - S0) / 2, py = (h - S0) / 2;
   const cx = px + S0 * 0.5038, cy = py + S0 * 0.5029;   /* 穴の中心は少しずれている */
   const HOLE = 0.616;                       /* 板の穴の直径（実物を測った値） */
-  const R = S0 * HOLE / 2 * 1.03;           /* 穴より少し大きく。隙間を見せない */
+  const R = S0 * HOLE / 2 * 1.07;           /* 穴より大きく。ふちに隙間を見せない */
 
   x.fillStyle = '#140c07'; x.fillRect(0, 0, w, h);
 
@@ -4612,10 +4612,13 @@ function drawFrontImg(x, w, h, u, panel, t0, noise) {
   vb.addColorStop(0, '#2b2a2b'); vb.addColorStop(.5, '#161516'); vb.addColorStop(1, '#0a0a0b');
   x.fillStyle = vb; x.fill();
   for (let i = 0; i < 150; i++) {
-    x.beginPath(); x.arc(0, 0, R * (0.36 + i * 0.00426), 0, 7);
+    x.beginPath(); x.arc(0, 0, R * (0.36 + i * 0.00400), 0, 7);
     x.strokeStyle = i % 2 ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.45)';
     x.lineWidth = 1; x.stroke();
   }
+  /* 溝の白がふちで点線に見えるので、外側は黒で締める */
+  x.beginPath(); x.arc(0, 0, R * 0.985, 0, 7);
+  x.strokeStyle = 'rgba(6,6,8,.95)'; x.lineWidth = Math.max(2, R * 0.035); x.stroke();
   const LR = R * 0.34;
   x.save();
   x.rotate(-spin);                       /* ラベルは回さない。回すと読めない */
@@ -4748,8 +4751,8 @@ function screenJuke() {
         ${(JB.genre || JB.mood) ? '<button class="hbtn" id="jclr">戻す</button>' : ''}
       </div>
       <div class="knobs">
-        <div class="kn"><img id="kvol" src="./img/knob.webp?v=2" alt=""><span>音量</span></div>
-        <div class="kn"><img id="kpage" src="./img/knob.webp?v=2" alt=""><span>面 ${JB.page + 1}/${pages}</span></div>
+        <div class="kn"><img id="kvol" src="./img/knob.webp?v=3" alt=""><span>音量</span></div>
+        <div class="kn"><img id="kpage" src="./img/knob.webp?v=3" alt=""><span>面 ${JB.page + 1}/${pages}</span></div>
       </div>
       <div class="win">
         <div class="now2">
