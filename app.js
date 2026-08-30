@@ -77,6 +77,7 @@ const S = {
   meter:  LS.get('meter', 'wave'),  // レベル計の見た目
   mood:   LS.get('mood', {}),       // { folderid: {bpm, gain, tag, hand:[手で付けた札]} }
   vol:    LS.get('vol', 1),         // 音量。端末ごとに覚える
+  tryGate: LS.get('tryGate', false), // 入口ごしに音を配らせるか（既定は使わない）
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
   relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
@@ -858,8 +859,10 @@ async function playAt(qi) {
          ただし入口は pCloud に断られることがある。音声要素で試すと1回15秒待たされ、
          曲の変わり目が止まって見える。先に頭の千バイトだけ貰って判断する。 */
       const gp = '/api/audio?fileid=' + encodeURIComponent(t.id);
+      /* 入口ごしは当てにならないことが分かった（410・502・形式不明）。
+         既定では試さない。⋯ で入にしたときだけ確かめる。 */
       let gateReady = false;
-      if (V.pipe !== 'direct') {
+      if (S.tryGate && V.pipe !== 'direct') {
         for (let k = 0; k < 2 && !gateReady; k++) gateReady = await gatePeek(gp);
       }
       if (gateReady) {
@@ -913,6 +916,14 @@ async function playAt(qi) {
   } catch (e) {
     if (seq !== playSeq) return;
     note('鳴らせない: ' + e.name + ' ' + (e.message || ''));
+    /* 入口の道で鳴らなかった。入口は 410・502・形式不明と三つの壊れ方をする。
+       診断を出して止めるより、直の道へ移して鳴らす。 */
+    if (GATE && String(src || '').indexOf('/api/audio') >= 0) {
+      V.pipe = 'direct';
+      note('入口の道は使わない。直に切り替える');
+      if (tapped()) foldGraph();
+      return playAt(qi);
+    }
     if (soPipe && V.pipe !== false) {
       /* 入口ごしが駄目だった。以後は端末が直に取りに行く。 */
       V.pipe = false;
@@ -3823,6 +3834,7 @@ function screenMenu() {
       ${GATE ? `<button class="row" id="leave"><span class="nm">この端末を外す</span><span class="sub">合言葉を入れ直すまで</span></button>` : `<button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>`}
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
+      <button class="row" id="gatetry"><span class="nm">入口ごしに音を配らせる</span><span class="sub">${S.tryGate ? '試す' : '使わない（既定）'}・波形が許可なしで出る代わりに不安定</span></button>
       <button class="row" id="reship"><span class="nm">同梱のジャケットを入れ直す</span><span class="sub">手で選んだものは残します</span></button>
       <button class="row" id="moodgo"><span class="nm">雰囲気を測る</span><span class="sub">${Object.keys(S.mood).length} 枚</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
@@ -3854,6 +3866,12 @@ function screenMenu() {
   const cd2 = $('#code'); if (cd2) cd2.onclick = () => go('#/code');
   $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
+  $('#gatetry').onclick = () => {
+    S.tryGate = !S.tryGate; LS.set('tryGate', S.tryGate);
+    V.pipe = null;
+    toast(S.tryGate ? '入口ごしを試します' : '入口ごしは使いません', 2500);
+    screenMenu();
+  };
   $('#reship').onclick = async () => {
     if (!confirm('自動で付いたジャケットを、同梱のもので入れ直します。手で選んだものは残ります。')) return;
     let n = 0;
@@ -4316,7 +4334,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v105');
+  L.push('版: v106');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4326,6 +4344,7 @@ async function selftest() {
            '（確か ' + sure + '・要確認 ' + iffy + '）');
   }
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
+  L.push('入口ごしを試す設定: ' + (S.tryGate ? 'はい' : 'いいえ'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
