@@ -207,6 +207,19 @@ async function apiPub(method, params = {}, ms = 25000) {
   return j;
 }
 
+/* 入口にどの口があるかを、その場で確かめる。憶測で直すより速い。 */
+async function gatePorts() {
+  const paths = ['/api/whoami', '/api/code', '/api/shelf', '/api/link?fileid=1', '/api/audio?fileid=1', '/api/pipe?u=x'];
+  const out = [];
+  for (const pth of paths) {
+    try {
+      const r = await fetch(pth, { cache: 'no-store', credentials: 'same-origin' });
+      out.push(pth.split('?')[0] + ': ' + r.status);
+    } catch (e) { out.push(pth.split('?')[0] + ': 届かない'); }
+  }
+  return out;
+}
+
 /* 古い入口ごしの道。棚とリンクだけは代わりに叩いてもらえる。 */
 async function apiViaGate(method, params) {
   if (method === 'showpublink') {
@@ -3116,8 +3129,16 @@ async function screenLib() {
     try { S.albums = await scanLibrary(S.rootId); }
     catch (e) {
       if (location.hash !== mine) return;
-      main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}<br><br>
-        <button class="hbtn" onclick="location.hash='#/pick/0'">フォルダを選び直す</button></div>`;
+      main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}<br>
+        <span id="ports" style="font-size:12px;color:var(--dim)">入口の口を数えています…</span><br><br>
+        <button class="hbtn" onclick="location.hash='#/pick/0'">フォルダを選び直す</button>
+        <button class="hbtn" onclick="location.reload()">開き直す</button>
+        <button class="hbtn" onclick="location.hash='#/routes'">調べる</button></div>`;
+      if (GATE) gatePorts().then(ps => {
+        const el = $('#ports'); if (!el) return;
+        el.innerHTML = '入口の口: ' + esc(ps.join(' / '));
+        note('入口の口: ' + ps.join(' / '));
+      }).catch(() => {});
       return;
     }
   }
@@ -4642,7 +4663,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v119');
+  L.push('版: v120');
+  if (GATE) { try { L.push('入口の口: ' + (await gatePorts()).join(' / ')); } catch (e) {} }
   L.push('入口の型: ' + (oldGate ? '古い（代わりに叩いてもらう）' : '新しい（符号を受け取る）'));
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
