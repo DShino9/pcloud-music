@@ -74,6 +74,7 @@ const S = {
   sort:   LS.get('sort', 'artist'),
   cell:   LS.get('cell', 'm'),      // ジャケットの大きさ 小・中・大
   deco:   LS.get('deco', true),     // 音が読めないとき、飾りとして動かすか
+  meter:  LS.get('meter', 'wave'),  // レベル計の見た目
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
   relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
@@ -900,6 +901,84 @@ async function canAnalyse() {
   } catch (e) {}
   return false;
 }
+/* 鳴っている「出力」から拾う。ファイルの中身を読む必要がない。
+   ① 要素の出力をそのまま取る（許可不要）
+   ② タブの音を拾う（一度だけ許可が要る。画面共有の仕組みを音だけに使う）
+   どちらも CORS とは無関係に動く。 */
+function wireAnalyser(node, ctx) {
+  const sp = ctx.createChannelSplitter(2);
+  V.aL = ctx.createAnalyser(); V.aR = ctx.createAnalyser();
+  V.aL.fftSize = V.aR.fftSize = 2048;
+  V.aL.smoothingTimeConstant = V.aR.smoothingTimeConstant = 0.72;
+  node.connect(sp);
+  sp.connect(V.aL, 0); sp.connect(V.aR, 1);
+  V.fL = new Uint8Array(V.aL.frequencyBinCount);
+  V.fR = new Uint8Array(V.aR.frequencyBinCount);
+  V.td = new Uint8Array(V.aL.fftSize);
+  V.ctx = ctx; V.ok = true;
+}
+/* 実際に音が来ているかを確かめる。来ていなければ諦めて元に戻す。 */
+function hasSignal(ms = 1200) {
+  return new Promise(res => {
+    const t0 = Date.now();
+    const tick = () => {
+      if (!V.aL) return res(false);
+      V.aL.getByteFrequencyData(V.fL);
+      let sum = 0;
+      for (let i = 0; i < V.fL.length; i++) sum += V.fL[i];
+      if (sum > 200) return res(true);
+      if (Date.now() - t0 > ms) return res(false);
+      setTimeout(tick, 80);
+    };
+    tick();
+  });
+}
+async function tapElement() {
+  if (V.ok) return true;
+  const grab = au.captureStream ? au.captureStream.bind(au)
+             : (au.mozCaptureStream ? au.mozCaptureStream.bind(au) : null);
+  if (!grab) return false;
+  try {
+    const st = grab();
+    if (!st || !st.getAudioTracks().length) return false;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    wireAnalyser(ctx.createMediaStreamSource(st), ctx);
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+    if (await hasSignal()) { note('出力から拾えた（要素）'); V.tap = 'element'; return true; }
+    try { ctx.close(); } catch (e) {}
+    V.ok = false; V.ctx = null;
+  } catch (e) { note('要素の出力を取れない: ' + (e.name || e)); }
+  return false;
+}
+async function tapTab() {
+  if (V.ok) return true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return false;
+  try {
+    const st = await navigator.mediaDevices.getDisplayMedia({
+      video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      preferCurrentTab: true,
+    });
+    st.getVideoTracks().forEach(t => t.stop());          /* 映像は要らない */
+    if (!st.getAudioTracks().length) {
+      st.getTracks().forEach(t => t.stop());
+      toast('音が共有されませんでした。「タブの音声も共有」に印を付けてください', 6000);
+      return false;
+    }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    wireAnalyser(ctx.createMediaStreamSource(st), ctx);
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+    V.tapStream = st;
+    if (await hasSignal(2500)) { note('出力から拾えた（タブの音）'); V.tap = 'tab'; return true; }
+    st.getTracks().forEach(t => t.stop());
+    try { ctx.close(); } catch (e) {}
+    V.ok = false; V.ctx = null;
+    toast('音を拾えませんでした', 4000);
+  } catch (e) { note('タブの音を拾えない: ' + (e.name || e)); }
+  return false;
+}
+
 function initGraph() {
   if (V.ctx) return V.ok;
   try {
@@ -1045,6 +1124,83 @@ function quietSpot(im, id) {
 }
 const BOXES = { br: [0.50,0.60], tr: [0.50,0.30], mr: [0.46,0.42], tc: [0.36,0.22] };
 
+
+/* レベル計の品揃え。飾りである以上、見た目くらいは選べる方がよい。 */
+const METERS = {
+  wave: '波形（細い縦棒）',
+  seg:  '段階バー（緑・琥珀・赤）',
+  vu:   'アナログ針',
+  dots: '点の列',
+  none: '出さない',
+};
+function drawMeter(x, u, ox, oy, S0, spot) {
+  const kind = S.meter || 'wave';
+  if (kind === 'none') return;
+  const live = V.ok || (S.deco && !au.paused);
+  if (!live) return;
+  const rowH = u(0.052);
+  const my = (spot === 'br') ? oy + u(0.14) : oy + u(0.845);
+  const rows = [['L', lvL], ['R', lvR]];
+
+  if (kind === 'vu') {
+    rows.forEach((row, ri) => {
+      const cx = ox + S0 - u(0.30) + ri * u(0.20), cy = my + u(0.03), r = u(0.085);
+      x.fillStyle = 'rgba(238,232,214,.92)';
+      x.fillRect(cx - r * 1.15, cy - r * 0.95, r * 2.3, r * 1.15);
+      for (let i = 0; i <= 8; i++) {
+        const a2 = Math.PI * (1.12 - i / 8 * 0.84);
+        x.beginPath();
+        x.moveTo(cx + Math.cos(a2) * r * 0.78, cy - Math.sin(a2) * r * 0.78);
+        x.lineTo(cx + Math.cos(a2) * r * 0.92, cy - Math.sin(a2) * r * 0.92);
+        x.strokeStyle = i > 6 ? 'rgba(185,40,30,.9)' : 'rgba(40,35,30,.75)';
+        x.lineWidth = i > 6 ? 2 : 1; x.stroke();
+      }
+      const a3 = Math.PI * (1.12 - Math.min(1, row[1]) * 0.84);
+      x.beginPath(); x.moveTo(cx, cy);
+      x.lineTo(cx + Math.cos(a3) * r * 0.86, cy - Math.sin(a3) * r * 0.86);
+      x.strokeStyle = '#1b1b1b'; x.lineWidth = 2; x.stroke();
+      x.fillStyle = '#1b1b1b'; x.beginPath(); x.arc(cx, cy, 2.5, 0, 7); x.fill();
+      x.fillStyle = 'rgba(40,35,30,.8)';
+      x.font = '700 ' + u(0.028) + 'px "Hiragino Sans",sans-serif';
+      x.fillText(row[0], cx - u(0.008), cy - r * 0.55);
+      x.lineWidth = 1;
+    });
+    return;
+  }
+
+  const n = kind === 'seg' ? 16 : 24;
+  const gap = u(kind === 'seg' ? 0.019 : 0.0135);
+  const bw  = Math.max(1.5, u(kind === 'seg' ? 0.012 : 0.0062));
+  const mw = u(0.05) + n * gap;
+  const mx = ox + S0 - u(0.055) - mw;
+  x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
+  rows.forEach((row, ri) => {
+    const y = my + ri * rowH;
+    x.fillStyle = 'rgba(255,255,255,.95)';
+    x.fillText(row[0], mx, y + u(0.014));
+    for (let i = 0; i < n; i++) {
+      const f = i / n;
+      const v = band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0);
+      if (kind === 'seg') {
+        const on = f < row[1];
+        x.fillStyle = on ? (f > 0.84 ? '#e06c75' : f > 0.62 ? '#e5a34a' : '#5fbf7f')
+                         : 'rgba(255,255,255,.13)';
+        x.fillRect(mx + u(0.05) + i * gap, y - u(0.016), bw, u(0.032));
+      } else if (kind === 'dots') {
+        const on = f < row[1];
+        x.beginPath();
+        x.arc(mx + u(0.05) + i * gap + bw / 2, y, u(0.006), 0, 7);
+        x.fillStyle = on ? `rgba(255,255,255,${0.5 + v * 0.5})` : 'rgba(255,255,255,.16)';
+        x.fill();
+      } else {
+        const bh = Math.max(u(0.004), v * u(0.05));
+        x.fillStyle = `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`;
+        x.fillRect(mx + u(0.05) + i * gap, y - bh / 2, bw, bh);
+      }
+    }
+  });
+}
+
 const VD = {
   /* お手本（大航海時代の盤）の作りをそのまま起こす。
        ① ジャケットを背景に敷く
@@ -1179,27 +1335,7 @@ const VD = {
     x.fillText(cleanName(al.name), px + u(0.03), py + u(0.198));
 
     /* ⑥ 左下の L／R */
-    const n = 24, gap = u(0.0135), bw = Math.max(1.5, u(0.0062));
-    const mw = u(0.05) + n * gap;
-    const mx = ox + S0 - u(0.055) - mw, rowH = u(0.052);
-    /* 札が下にあるときは上へ逃がす */
-    const my = (spot === 'br') ? oy + u(0.14) : oy + u(0.845);
-    const live = V.ok || (S.deco && !au.paused);
-    if (live) {
-    x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
-    [['L', lvL], ['R', lvR]].forEach((row, ri) => {
-      const y = my + ri * rowH;
-      x.fillStyle = 'rgba(255,255,255,.95)';
-      x.fillText(row[0], mx, y + u(0.014));
-      for (let i = 0; i < n; i++) {
-        const v = band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0);
-        const bh = Math.max(u(0.004), v * u(0.05));
-        x.fillStyle = `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`;
-        x.fillRect(mx + u(0.05) + i * gap, y - bh / 2, bw, bh);
-      }
-    });
-    }
-
+    drawMeter(x, u, ox, oy, S0, spot);
     x.restore();
     x.beginPath(); x.rect(ox - 1, oy - 1, S0 + 2, S0 + 2);
     x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.22})`;
@@ -1425,13 +1561,20 @@ function screenNow() {
     const own = src.startsWith('blob:') || src.startsWith(location.origin);
     /* 読める音かどうかは、実際に印を付けて読み込み直してみるのが確か。
        通れば解析でき、通らなければ元に戻す（音は止めない）。 */
-    /* ① CORS の印を付けて読み直せるか ② 素直な GET で全部落として手元で鳴らせるか。
-       ②が通れば、手元の音になるので解析は必ず通る（本物のレベル計が出る）。 */
+    /* まず鳴っている出力から拾う。ファイルの中身が読めなくても関係ない。 */
+    if (!own && await tapElement()) { paint(); return; }
     if (!own && !(await tryCors()) && !(await bufferHere(cc))) {
       $('#nmsg').className = 'msg';
-      $('#nmsg').textContent = S.deco
-        ? '本物の音量は出せない曲です（pCloud が中身を読ませないため）。いまは飾りとして動かしています'
-        : 'この曲は pCloud が中身を読ませないので、レベル計は止まったままです（⚙ で飾りとして動かせます）';
+      $('#nmsg').innerHTML = '本物の波形を出すには、鳴っている音を拾う許可が要ります。' +
+        ' <button class="hbtn" id="ntap" style="padding:5px 10px;font-size:12px">この音を拾う</button>' +
+        '<br><span style="font-size:11.5px">押すと共有の窓が出ます。<b>このタブ</b>を選び、' +
+        '<b>「タブの音声も共有」に印</b>を付けてください。映像は使いません。</span>';
+      const nt = $('#ntap');
+      if (nt) nt.onclick = async () => {
+        nt.textContent = '拾っています…';
+        if (await tapTab()) { $('#nmsg').textContent = '本物の波形が出ています'; }
+        else { nt.textContent = 'もう一度試す'; }
+      };
       note('解析しない（読めない音）');
       return;
     }
@@ -1463,8 +1606,15 @@ function screenVis() {
         <span class="chk ${S.deco ? 'on' : ''}">${S.deco ? '✓' : ''}</span>
       </button>
     </div>
+    <div class="sect" style="margin-top:18px">レベル計の見た目</div>
+    <div class="rowlist">${Object.entries(METERS).map(([k, n]) => `
+      <button class="row" data-m="${k}"><span class="nm">${n}</span>
+        <span class="chk ${S.meter === k ? 'on' : ''}">${S.meter === k ? '✓' : ''}</span></button>`).join('')}</div>
     <div class="note" style="padding:12px 2px 0">選んだものを、再生画面で触るたびに順に切り替えます。</div>`;
   $('#deco').onclick = () => { S.deco = !S.deco; LS.set('deco', S.deco); screenVis(); };
+  main().querySelectorAll('[data-m]').forEach(b => b.onclick = () => {
+    S.meter = b.dataset.m; LS.set('meter', S.meter); screenVis();
+  });
   main().querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
     const k = b.dataset.v;
     S.vis = S.vis.includes(k) ? S.vis.filter(x => x !== k) : S.vis.concat(k);
@@ -1997,44 +2147,9 @@ function shownAlbums() {
   return list.sort((SORTS[S.sort] || SORTS.artist)[1]);
 }
 
-async function screenLib() {
-  $('#hdr').classList.remove('hide');
-  $('#title').textContent = S.rootName || '音楽棚';
-  $('#btnCovers').classList.remove('hide'); $('#btnMenu').classList.remove('hide');
-  $('#btnSearch').classList.remove('hide');
-  $('#back').classList.add('hide');
-  if (!S.albums.length) {
-    main().innerHTML = '<div class="empty">棚を読んでいます…<br>（初回は少しかかります）</div>';
-    try {
-      S.albums = await scanLibrary(S.rootId);
-    } catch (e) {
-      main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}<br><br>
-        <button class="hbtn" onclick="location.hash='#/pick/0'">フォルダを選び直す</button></div>`;
-      return;
-    }
-  }
-  const sw = S.sweep ? `<div class="sweep"><div class="bar"><i id="swbar"></i></div>
-      <span id="swtxt"></span><button class="hbtn" id="swstop">やめる</button></div>` : '';
-  const counts = {};
-  for (const k of Object.keys(FILTERS)) counts[k] = S.albums.filter(FILTERS[k][1]).length;
-  const chips = `<div class="chips">` +
-    Object.keys(FILTERS).map(k =>
-      `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${FILTERS[k][0]} ${counts[k]}</button>`).join('') +
-    `</div>`;
-  const gl = genreList();
-  const bar = `<div class="tools">
-      <select id="sortsel">${Object.keys(SORTS).map(k =>
-        `<option value="${k}"${S.sort === k ? ' selected' : ''}>${SORTS[k][0]}</option>`).join('')}</select>
-      <select id="gensel">
-        <option value="">ジャンル：すべて</option>
-        ${gl.map(([g, n]) => `<option value="${esc(g)}"${S.genre === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}
-      </select>
-      <button class="hbtn" id="shufAll">🔀 シャッフル</button>
-      <button class="hbtn" id="smart">条件で組む</button>
-      <button class="hbtn" id="cell">${{ s: '小', m: '中', l: '大' }[S.cell]}</button>
-    </div>`;
-  const shown = shownAlbums();
-  main().innerHTML = sw + chips + bar + `<div class="grid">${shown.map(al => {
+/* 棚の札を描く。掘った先でも同じものを使う。 */
+function gridOf(list) {
+  return `<div class="grid">${list.map(al => {
     const cv = coverOf(al), c = S.covers[al.id];
     const badge = c && !c.manual && c.sure === false
                 ? `<button class="badge auto" data-fix="${al.id}">要確認 ›</button>`
@@ -2050,27 +2165,9 @@ async function screenLib() {
       <div class="t">${esc(al.name)}</div>
       <div class="a">${esc(al.artist)}${y ? ' · ' + esc(y) : ''} · ${al.tracks.length}曲</div>
     </div>`;
-  }).join('')}</div>` + (shown.length ? '' :
-    `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
-
-  main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
-    S.filter = b.dataset.f; LS.set('filter', S.filter);
-    scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
-  });
-  $('#sortsel').onchange = e => {
-    S.sort = e.target.value; LS.set('sort', S.sort);
-    scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
-  };
-  $('#gensel').onchange  = e => {
-    S.genre = e.target.value; LS.set('genre', S.genre);
-    scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0);
-  };
-  $('#cell').onclick = () => {
-    S.cell = { s: 'm', m: 'l', l: 's' }[S.cell];
-    LS.set('cell', S.cell); document.body.dataset.cell = S.cell; screenLib();
-  };
-  $('#shufAll').onclick  = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
-  $('#smart').onclick    = () => go('#/smart');
+  }).join('')}</div>`;
+}
+function wireGrid() {
   const byId = id => S.albums.find(a => String(a.id) === String(id));
   main().querySelectorAll('[data-open]').forEach(b => b.onclick = e => {
     if (e.target.closest('[data-play],[data-menu],[data-fix]')) return;
@@ -2085,8 +2182,133 @@ async function screenLib() {
   main().querySelectorAll('[data-menu]').forEach(b => b.onclick = e => {
     e.stopPropagation(); const al = byId(b.dataset.menu); if (al) albumSheet(al);
   });
+}
+/* 棚・アーティスト・ジャンルの行き来。上に貼り付いて流れない。 */
+const tabsOf = cur2 => `<div class="chips">${
+  [['lib','棚'],['artists','アーティスト'],['genres','ジャンル']].map(([k, n]) =>
+    `<button class="hbtn ${cur2 === k ? 'on' : ''}" data-tab="${k}">${n}</button>`).join('')}</div>`;
+function wireTabs() {
+  main().querySelectorAll('[data-tab]').forEach(b => b.onclick = () =>
+    go(b.dataset.tab === 'lib' ? '#/lib' : '#/' + b.dataset.tab));
+}
+
+async function screenLib() {
+  $('#hdr').classList.remove('hide');
+  $('#title').textContent = S.rootName || '音楽棚';
+  $('#btnCovers').classList.remove('hide'); $('#btnMenu').classList.remove('hide');
+  $('#btnSearch').classList.remove('hide');
+  $('#back').classList.add('hide');
+  if (!S.albums.length) {
+    main().innerHTML = '<div class="empty">棚を読んでいます…<br>（初回は少しかかります）</div>';
+    try { S.albums = await scanLibrary(S.rootId); }
+    catch (e) {
+      main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}<br><br>
+        <button class="hbtn" onclick="location.hash='#/pick/0'">フォルダを選び直す</button></div>`;
+      return;
+    }
+  }
+  const sw = S.sweep ? `<div class="sweep"><div class="bar"><i id="swbar"></i></div>
+      <span id="swtxt"></span><button class="hbtn" id="swstop">やめる</button></div>` : '';
+  const counts = {};
+  for (const k of Object.keys(FILTERS)) counts[k] = S.albums.filter(FILTERS[k][1]).length;
+  const labels = { all: 'すべて', fav: '★', recent: '最近聴いた', off: '端末',
+                   iffy: '要確認', none: 'ジャケット無し' };
+  const gl = genreList();
+  const shown = shownAlbums();
+  main().innerHTML = sw + `<div class="libbar">
+      ${tabsOf('lib')}
+      <div class="tools">
+        <select id="sortsel">${Object.keys(SORTS).map(k =>
+          `<option value="${k}"${S.sort === k ? ' selected' : ''}>${SORTS[k][0]}</option>`).join('')}</select>
+        <select id="gensel">
+          <option value="">ジャンル：すべて</option>
+          ${gl.map(([g, n]) => `<option value="${esc(g)}"${S.genre === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}
+        </select>
+        <button class="hbtn" id="cell">${{ s: '小', m: '中', l: '大' }[S.cell]}</button>
+        <button class="hbtn" id="shufAll">🔀</button>
+        <button class="hbtn" id="smart">条件</button>
+      </div>
+      <div class="chips">${Object.keys(FILTERS).map(k =>
+        `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]} ${counts[k]}</button>`).join('')}</div>
+    </div>` + gridOf(shown) +
+    (shown.length ? '' : `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
+
+  wireTabs(); wireGrid();
+  const redraw = () => { scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0); };
+  main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
+    S.filter = b.dataset.f; LS.set('filter', S.filter); redraw();
+  });
+  $('#sortsel').onchange = e => { S.sort = e.target.value; LS.set('sort', S.sort); redraw(); };
+  $('#gensel').onchange  = e => { S.genre = e.target.value; LS.set('genre', S.genre); redraw(); };
+  $('#cell').onclick = () => {
+    S.cell = { s: 'm', m: 'l', l: 's' }[S.cell];
+    LS.set('cell', S.cell); document.body.dataset.cell = S.cell; screenLib();
+  };
+  $('#shufAll').onclick = () => startQueue(shuffle(shown.flatMap(albumRefs)), 0);
+  $('#smart').onclick   = () => go('#/smart');
   const stop = $('#swstop'); if (stop) stop.onclick = () => { S.sweep.stop = true; toast('止めます'); };
   updateSweepBar();
+}
+
+/* 掘る。1535枚を上から眺めるのは無理なので、まとまりから入る。 */
+function groupsOf(kind) {
+  const m = new Map();
+  for (const al of S.albums) {
+    const k = kind === 'artist' ? cleanName(al.artist) : albumGenre(al);
+    if (!k) continue;
+    const g = m.get(k) || { n: 0, al: null, tracks: 0 };
+    g.n++; g.tracks += al.tracks.length;
+    if (!g.al || (!coverOf(g.al) && coverOf(al))) g.al = al;
+    m.set(k, g);
+  }
+  return [...m.entries()].sort((a, b) => b[1].n - a[1].n || collator.compare(a[0], b[0]));
+}
+function screenBrowse(kind) {
+  $('#hdr').classList.remove('hide'); $('#back').classList.add('hide');
+  $('#title').textContent = kind === 'artist' ? 'アーティスト' : 'ジャンル';
+  $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.remove('hide');
+  $('#btnMenu').classList.remove('hide');
+  const gs = groupsOf(kind);
+  const none = S.albums.filter(al => !(kind === 'artist' ? cleanName(al.artist) : albumGenre(al))).length;
+  main().innerHTML = `<div class="libbar">${tabsOf(kind === 'artist' ? 'artists' : 'genres')}
+      <div class="srch"><input id="bq" placeholder="${kind === 'artist' ? 'アーティストを絞る' : 'ジャンルを絞る'}"
+        autocapitalize="off"></div></div>
+    <div id="blist"></div>
+    ${kind === 'genre' && none ? `<div class="note" style="padding:12px 2px 0">
+      ジャンルが入っていないものが ${none} 枚あります。⋯ →「ジャンルと年代を集める」で埋まります。</div>` : ''}`;
+  const draw = () => {
+    const q = norm(($('#bq') || {}).value || '');
+    const list = gs.filter(([k]) => !q || norm(k).includes(q));
+    $('#blist').innerHTML = list.map(([k, g]) => `
+      <button class="hit2" data-g="${esc(k)}">
+        ${coverOf(g.al) ? `<img loading="lazy" src="${esc(coverOf(g.al))}">`
+                        : `<img alt="" style="${madeCover(g.al)}">`}
+        <span class="t2"><span class="n2">${esc(k)}</span>
+          <span class="a2">${g.n} アルバム · ${g.tracks} 曲</span></span>
+      </button>`).join('') || '<div class="empty">見つかりません</div>';
+    $('#blist').querySelectorAll('[data-g]').forEach(b => b.onclick = () =>
+      go('#/by/' + kind + '/' + encodeURIComponent(b.dataset.g)));
+  };
+  let t2 = null;
+  $('#bq').oninput = () => { clearTimeout(t2); t2 = setTimeout(draw, 140); };
+  draw(); wireTabs();
+}
+function screenBy(kind, key) {
+  $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
+  $('#title').textContent = key;
+  $('#btnCovers').classList.add('hide'); $('#btnSearch').classList.remove('hide');
+  const list = S.albums.filter(al =>
+    (kind === 'artist' ? cleanName(al.artist) : albumGenre(al)) === key)
+    .sort((SORTS[S.sort] || SORTS.artist)[1]);
+  main().innerHTML = `<div class="libbar"><div class="tools">
+      <button class="hbtn" id="pall2">▶ 通して聴く</button>
+      <button class="hbtn" id="shuf2">🔀 シャッフル</button>
+      <span class="a" style="align-self:center">${list.length} アルバム</span>
+    </div></div>` + gridOf(list);
+  wireGrid();
+  $('#pall2').onclick = () => startQueue(list.flatMap(albumRefs), 0);
+  $('#shuf2').onclick = () => startQueue(shuffle(list.flatMap(albumRefs)), 0);
+  $('#back').onclick  = () => go(kind === 'artist' ? '#/artists' : '#/genres');
 }
 
 function screenAlbum(id) {
@@ -2649,6 +2871,10 @@ function routeTo() {
   if (h === '#/now')             return screenNow();
   if (h === '#/vis')             return screenVis();
   if (h === '#/search')          return screenSearch();
+  if (h === '#/artists')         return screenBrowse('artist');
+  if (h === '#/genres')          return screenBrowse('genre');
+  if (h.startsWith('#/by/artist/')) return screenBy('artist', decodeURIComponent(h.slice(12)));
+  if (h.startsWith('#/by/genre/'))  return screenBy('genre',  decodeURIComponent(h.slice(11)));
   if (h === '#/car')             return screenCar();
   if (h === '#/routes')          return screenRoutes();
   if (h === '#/relay')           return screenRelay();
@@ -3035,7 +3261,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v51');
+  L.push('版: v53');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));

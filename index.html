@@ -104,6 +104,12 @@ body[data-cell="s"] .cov .go{width:28px;height:28px;font-size:11px}
 .al .a{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ---- 絞り込みと並び替え ---- */
+.libbar{position:sticky;top:calc(var(--top) + var(--hdr));z-index:14;
+  background:var(--bg);padding:8px 0 4px;margin:-12px 0 8px}
+body.playing .libbar{top:calc(var(--top) + var(--hdr) + var(--bar))}
+.libbar .chips{margin-bottom:8px}
+.libbar .tools{margin-bottom:8px}
+.libbar .srch{margin-bottom:4px}
 .chips{display:flex;gap:7px;overflow-x:auto;margin-bottom:11px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
 .chips .hbtn{flex:none}
 .tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -324,6 +330,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=51"></script>
+<script src="./app.js?v=53"></script>
 </body>
 </html>
