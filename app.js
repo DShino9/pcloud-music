@@ -541,8 +541,12 @@ const madeCover = al => {
 
 /* ============ 操作シート ============ */
 /* YouTube Music の ⋮ にあたるもの。曲でもアルバムでも同じ形で出す。 */
+let sheetGen = 0;
 function sheet(head, items) {
   const bg = $('#sheetbg'), sh = $('#sheet');
+  /* 閉じる動きが 200ms 残る。その間に次のシートを開くと、あとから来た
+     「隠す」が新しい方を消してしまう（実際に消えていた）。世代で見張る。 */
+  const gen = ++sheetGen;
   sh.innerHTML = `<div class="grip"></div>
     <div class="head">
       ${head.cover ? `<img src="${esc(head.cover)}" onerror="this.style.visibility='hidden'">`
@@ -554,13 +558,17 @@ function sheet(head, items) {
   bg.classList.remove('hide'); sh.classList.remove('hide');
   requestAnimationFrame(() => { bg.classList.add('on'); sh.classList.add('on'); });
   const close = () => {
+    if (gen !== sheetGen) return;
     bg.classList.remove('on'); sh.classList.remove('on');
-    setTimeout(() => { bg.classList.add('hide'); sh.classList.add('hide'); }, 200);
+    setTimeout(() => {
+      if (gen !== sheetGen) return;            /* もう次のシートが出ている */
+      bg.classList.add('hide'); sh.classList.add('hide');
+    }, 200);
   };
   bg.onclick = close;
   sh.querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
-    close();
     const it = items.filter(Boolean)[+b.dataset.k];
+    close();
     if (it && it[2]) it[2]();
   });
   return close;
@@ -4308,7 +4316,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v102');
+  L.push('版: v103');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
