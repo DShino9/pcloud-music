@@ -4316,7 +4316,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v103');
+  L.push('版: v104');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4570,6 +4570,20 @@ function screenJuke() {
   main().innerHTML = `
     <div class="jb"><div class="cab">
       <div class="panel"><canvas id="jbfront"></canvas></div>
+      <div class="brassrow">
+        <select id="jgen">
+          <option value="">ジャンル：すべて</option>
+          ${genreList().map(([g, n]) =>
+            `<option value="${esc(g)}"${JB.genre === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}
+        </select>
+        <select id="jmood">
+          <option value="">雰囲気：すべて</option>
+          ${jukeMoodList().map(([k, n]) =>
+            `<option value="${esc(k)}"${JB.mood === k ? ' selected' : ''}>${esc(moodLabel(k))}（${n}）</option>`).join('')}
+        </select>
+        <span class="cnt">${pool.length} 枚</span>
+        ${(JB.genre || JB.mood) ? '<button class="hbtn" id="jclr">戻す</button>' : ''}
+      </div>
       <div class="win">
         <div class="now2">
           ${c && coverOf(c.al) ? `<img src="${esc(coverOf(c.al))}">` : '<img alt="">'}
@@ -4581,20 +4595,6 @@ function screenJuke() {
             <div class="n3" style="font-size:22px">${esc(JB.pick || jbCode(0))}</div>
             <div class="a3">${JB.page + 1} / ${pages} 面</div>
           </div>
-        </div>
-        <div class="pickrow">
-          <select id="jgen">
-            <option value="">ジャンル：すべて</option>
-            ${genreList().map(([g, n]) =>
-              `<option value="${esc(g)}"${JB.genre === g ? ' selected' : ''}>${esc(g)}（${n}）</option>`).join('')}
-          </select>
-          <select id="jmood">
-            <option value="">雰囲気：すべて</option>
-            ${jukeMoodList().map(([k, n]) =>
-              `<option value="${esc(k)}"${JB.mood === k ? ' selected' : ''}>${esc(moodLabel(k))}（${n}）</option>`).join('')}
-          </select>
-          <span class="cnt">${pool.length} 枚</span>
-          ${(JB.genre || JB.mood) ? '<button class="hbtn" id="jclr">戻す</button>' : ''}
         </div>
         <div class="rack">${list.map((al, i) => `
           <button class="strip ${c && c.al.id === al.id ? 'on' : ''}" data-j="${i}">
