@@ -4251,6 +4251,13 @@ async function selftest() {
   }
   L.push('版: v90');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
+  {
+    const cs = Object.values(S.covers);
+    const sure = cs.filter(c => c && c.url && c.sure !== false).length;
+    const iffy = cs.filter(c => c && c.url && c.sure === false).length;
+    L.push('ジャケット: 棚 ' + S.albums.length + ' 枚／付いている ' + (sure + iffy) +
+           '（確か ' + sure + '・要確認 ' + iffy + '）');
+  }
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
   L.push('波形: ' + (V.ok ? '本物（' + (V.tap || '') + '）' : S.deco ? '飾り' : '止' ));
