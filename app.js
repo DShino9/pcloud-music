@@ -3326,6 +3326,8 @@ function screenSmart() {
       <select id="sd"><option value="">年代：すべて</option>
         ${['1960','1970','1980','1990','2000','2010','2020'].map(d =>
           `<option value="${d}"${SMART.d === d ? ' selected' : ''}>${d}年代</option>`).join('')}</select>
+      <select id="sm2"><option value="">雰囲気：すべて</option>
+        ${TAGS.map(t => `<option value="${esc(t)}"${SMART.m === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>
       <select id="sn">${[20, 40, 60, 100, 200].map(n =>
         `<option value="${n}"${SMART.n === n ? ' selected' : ''}>${n} 曲</option>`).join('')}</select>
     </div>
@@ -3338,6 +3340,7 @@ function screenSmart() {
   });
   $('#sg').onchange = e => { SMART.g = e.target.value; LS.set('smart', SMART); };
   $('#sd').onchange = e => { SMART.d = e.target.value; LS.set('smart', SMART); };
+  $('#sm2').onchange = e => { SMART.m = e.target.value; LS.set('smart', SMART); };
   $('#sn').onchange = e => { SMART.n = +e.target.value; LS.set('smart', SMART); };
   $('#build').onclick = () => {
     const list = buildSmart();
@@ -3356,7 +3359,17 @@ function buildSmart() {
     if (SMART.d) { const y = +albumYear(al); if (!y || y < +SMART.d || y >= +SMART.d + 10) return false; }
     return true;
   });
-  let refs = shuffle(als.flatMap(albumRefs));
+  /* 雰囲気で絞るときは曲の札を見る。アルバム単位だと、静かな盤の激しい曲まで来る。 */
+  let refs;
+  if (SMART.m) {
+    const want = SMART.m;
+    const ids = new Set(als.map(al => al.id));
+    const hits = allTagged().filter(x => ids.has(x.al.id) && x.g.includes(want));
+    if (hits.length) refs = shuffle(hits.map(x => ({ al: x.al, i: x.i })));
+    else refs = shuffle(als.filter(al => moodOf(al) === want).flatMap(albumRefs));
+  } else {
+    refs = shuffle(als.flatMap(albumRefs));
+  }
   if (SMART.spread) {
     /* 同じアーティストが続かないように、後ろへ送りながら取り出す */
     const out = [], pool = refs.slice();
@@ -4161,7 +4174,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v85');
+  L.push('版: v86');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
