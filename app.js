@@ -3108,7 +3108,9 @@ function tmoodOf(al, i) {
   if (!t) return null;
   const k = tkey(trackTitle(t));
   let hit = e.tracks.find(x => x.k === k);
-  if (!hit && k) hit = e.tracks.find(x => x.k.includes(k) || k.includes(x.k));
+  /* 部分一致は、短い題だと何にでも当たる（「t」が全部に当たっていた）。
+     ある程度の長さがあるときだけ許す。 */
+  if (!hit && k.length >= 4) hit = e.tracks.find(x => x.k.length >= 4 && (x.k.includes(k) || k.includes(x.k)));
   if (!hit && e.tracks.length === al.tracks.length) hit = e.tracks[i];
   return hit ? hit.g.filter(g => !TAGS_BAD.has(g)) : null;
 }
@@ -4369,7 +4371,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v111');
+  L.push('版: v112');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
