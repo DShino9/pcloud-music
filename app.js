@@ -4078,7 +4078,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v75');
+  L.push('版: v76');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
@@ -4297,8 +4297,21 @@ function toggle() { au.paused ? au.play().catch(() => {}) : au.pause(); }
 addEventListener('keydown', e => {
   if (typing(e)) { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key;
+  /* 焦点がボタンや札に載っているときの Enter・空白は「押す」。
+     ここを奪うと、リモコンやキーボードだけでは何も選べなくなる。 */
+  const ae = document.activeElement;
+  const onCtl = ae && ae !== document.body &&
+    /^(BUTTON|A|SELECT|SUMMARY)$/.test(ae.tagName || '');
+  if (onCtl && (k === 'Enter' || k === ' ')) return;
   const hit = {
     ' ': toggle, 'MediaPlayPause': toggle, 'Enter': toggle, 'k': toggle,
+    'MediaPlay': () => { if (au.paused) au.play().catch(() => {}); },
+    'MediaPause': () => au.pause(),
+    'MediaStop': () => { au.pause(); au.currentTime = 0; },
+    'MediaFastForward': () => nudge(30), 'MediaRewind': () => nudge(-30),
+    'AudioVolumeUp': () => vol(0.05), 'AudioVolumeDown': () => vol(-0.05),
+    'AudioVolumeMute': () => { au.muted = !au.muted; toast(au.muted ? '消音' : '消音を解く', 900); },
+    'ChannelUp': () => nextTrack(), 'ChannelDown': prevTrack,
     'MediaTrackNext': () => nextTrack(), 'MediaTrackPrevious': prevTrack,
     'ArrowRight': () => (e.shiftKey ? nextTrack() : nudge(10)),
     'ArrowLeft':  () => (e.shiftKey ? prevTrack() : nudge(-10)),
@@ -4350,7 +4363,6 @@ if (navigator.getGamepads) requestAnimationFrame(padLoop);
 note('画面を開いた（' + (location.hash || 'ハッシュなし') + '）');
 /* Service Worker はやめた。同じ置き場への要求を横取りする性質が、
    音（部分取得）と相性が悪く、古いものが居座ると原因が見えなくなる。
-   曲のオフライン保存は Cache Storage を自分で扱っているので影響しない。
    居座っているものは見つけ次第そのまま外す。 */
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(rs => {
