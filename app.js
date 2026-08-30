@@ -2860,10 +2860,32 @@ function autoMood(m) {
 }
 const moodOf = al => {
   const m = S.mood[al.id];
+  if (m && m.hand && m.hand.length) return m.hand[0];
+  /* 曲の札が集まっているなら、そこから決める。押さなくても埋まる。 */
+  const t = albumTagMood(al);
+  if (t) return t;
   if (!m) return null;
-  if (m.hand && m.hand.length) return m.hand[0];
   return m.tag || autoMood(m);
 };
+/* アルバムの雰囲気を、収めた曲の札の多数決で決める。 */
+const atmCache = new Map();
+function albumTagMood(al) {
+  if (!TMOOD) return null;
+  if (atmCache.has(al.id)) return atmCache.get(al.id);
+  const e = TMOOD.byPath[pathKey(al)];
+  let out = null;
+  if (e && e.ok) {
+    const cnt = {};
+    for (const t of e.tracks)
+      for (const g of t.g) if (!TAGS_BAD.has(g)) cnt[g] = (cnt[g] || 0) + 1;
+    /* 音の明るさは雰囲気ではなく音色なので、まとめの札には使わない */
+    delete cnt['明るい音']; delete cnt['暗い音'];
+    const top = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] >= 2) out = top[0];
+  }
+  atmCache.set(al.id, out);
+  return out;
+}
 const moodLabel = k => (MOODS[k] ? MOODS[k][0] : k);
 
 /* Deezer から BPM と音量を拾う。アルバム1枚につき1往復。 */
@@ -3110,7 +3132,12 @@ function screenBrowse(kind) {
   let t2 = null;
   $('#bq').oninput = () => { clearTimeout(t2); t2 = setTimeout(draw, 140); };
   draw(); wireTabs();
-  if (kind === 'mood') drawTagRow();
+  /* 曲の札から決まる雰囲気は、索引を読んだあとでないと出ない。読めたら組み直す。 */
+  if (kind === 'mood' && !TMOOD) drawTagRow().then(() => {
+    if (location.hash !== '#/moods') return;
+    atmCache.clear(); screenBrowse('mood');
+  });
+  else if (kind === 'mood') drawTagRow();
 }
 /* アルバム単位の雰囲気とは別に、曲ごとの札でも掘れるようにする。 */
 async function drawTagRow() {
@@ -4107,7 +4134,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v81');
+  L.push('版: v82');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
