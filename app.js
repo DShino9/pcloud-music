@@ -3073,7 +3073,26 @@ const tkey = s2 => String(s2 || '').toLowerCase()
 let TMOOD = null, tmoodIdx = null;
 async function loadTMood() {
   if (TMOOD) return TMOOD;
+  /* 索引は育つ（いずれ数 MB）。毎回まるごと読むと開くのが遅くなるので、
+     入れ物に預けておき、変わっていなければそれを使う。 */
   try {
+    if ('caches' in window) {
+      const c = await caches.open('idx-v1');
+      const hit = await c.match('./雰囲気.json');
+      const net = fetch('./雰囲気.json', { cache: 'no-cache' })
+        .then(r => { if (r.ok) c.put('./雰囲気.json', r.clone()); return r; });
+      const r = hit || await net;
+      TMOOD = await r.json();
+      if (hit) net.then(async r2 => {                 /* 裏で新しいものに入れ替える */
+        if (!r2 || !r2.ok) return;
+        const j = await r2.json();
+        const a = Object.values(j.byPath || {}).filter(v => v.ok).length;
+        const b = Object.values(TMOOD.byPath || {}).filter(v => v.ok).length;
+        if (a > b) { TMOOD = j; tmoodIdx = null; atmCache.clear();
+                     note('雰囲気の索引が増えた: ' + b + ' → ' + a); }
+      }).catch(() => {});
+      return TMOOD;
+    }
     const r = await fetch('./雰囲気.json', { cache: 'no-cache' });
     if (!r.ok) throw new Error(String(r.status));
     TMOOD = await r.json();
@@ -4350,7 +4369,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v110');
+  L.push('版: v111');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
