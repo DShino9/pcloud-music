@@ -2657,13 +2657,18 @@ function screenLogin() {
 }
 
 async function screenPick(folderid) {
+  const mine = location.hash;
   $('#hdr').classList.remove('hide');
   $('#title').textContent = '音楽のフォルダを選ぶ';
   $('#btnCovers').classList.add('hide'); $('#btnMenu').classList.add('hide');
   main().innerHTML = '<div class="empty">読んでいます…</div>';
   let r;
   try { r = await api('listfolder', { folderid }); }
-  catch (e) { main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}</div>`; return; }
+  catch (e) {
+    if (location.hash !== mine) return;
+    main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}</div>`; return;
+  }
+  if (location.hash !== mine) return;      /* 待つ間に画面を移っていたら書かない */
   const folders = (r.metadata.contents || []).filter(c => c.isfolder).sort(byName);
   const audioHere = (r.metadata.contents || []).filter(c => !c.isfolder && isAudio(c.name)).length;
   main().innerHTML = `
@@ -2762,6 +2767,7 @@ function wireTabs() {
 }
 
 async function screenLib() {
+  const mine = location.hash;
   $('#hdr').classList.remove('hide');
   $('#title').textContent = S.rootName || '音楽棚';
   $('#btnCovers').classList.remove('hide'); $('#btnMenu').classList.remove('hide');
@@ -2771,11 +2777,13 @@ async function screenLib() {
     main().innerHTML = '<div class="empty">棚を読んでいます…<br>（初回は少しかかります）</div>';
     try { S.albums = await scanLibrary(S.rootId); }
     catch (e) {
+      if (location.hash !== mine) return;
       main().innerHTML = `<div class="empty">読めません: ${esc(e.message)}<br><br>
         <button class="hbtn" onclick="location.hash='#/pick/0'">フォルダを選び直す</button></div>`;
       return;
     }
   }
+  if (location.hash !== mine) return;      /* 棚を読む間に移っていたら書かない */
   const sw = S.sweep ? `<div class="sweep"><div class="bar"><i id="swbar"></i></div>
       <span id="swtxt"></span><button class="hbtn" id="swstop">やめる</button></div>` : '';
   const counts = {};
@@ -4099,7 +4107,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v80');
+  L.push('版: v81');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
