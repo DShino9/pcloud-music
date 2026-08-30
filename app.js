@@ -73,6 +73,7 @@ const S = {
   genre:  LS.get('genre', ''),
   sort:   LS.get('sort', 'artist'),
   cell:   LS.get('cell', 'm'),      // ジャケットの大きさ 小・中・大
+  deco:   LS.get('deco', true),     // 音が読めないとき、飾りとして動かすか
   code:   LS.get('code', ''),       // 共有リンクの符号。これがあれば合鍵なしで読める
   linkpw: LS.get('linkpw', ''),     // 共有リンクに合言葉が掛かっている場合
   relay:  LS.get('relay', ''),      // 中継所のURL（符号が使えないときの逃げ道）
@@ -883,8 +884,34 @@ function initGraph() {
 /* 周波数の目盛りは対数。低い方を細かく見ないと、音楽らしい動きにならない。 */
 const band = new Float32Array(BANDS), peakB = new Float32Array(BANDS);
 let lvL = 0, lvR = 0, pkL = 0, pkR = 0, wav = new Float32Array(256), beatE = 0, spin = 0;
+/* 音が読めないときの飾り。曲の進みから作った、本物ではない動き。
+   設定で切れる。切ると止まったまま何も描かない。 */
+let decoT = 0;
+function decoAudio(dt) {
+  decoT += dt;
+  const t = decoT, beat = (au.currentTime % 0.55) / 0.55;
+  for (let i = 0; i < BANDS; i++) {
+    const f = i / BANDS;
+    const v = Math.max(0,
+        Math.exp(-Math.pow(f / 0.10, 2)) * (0.55 + 0.4 * Math.exp(-beat * 9))
+      + Math.exp(-Math.pow((f - 0.22 - 0.06 * Math.sin(t * 0.6)) / 0.12, 2)) * (0.30 + 0.22 * Math.sin(t * 1.7 + i * 0.2))
+      + Math.exp(-Math.pow((f - 0.6) / 0.3, 2)) * (0.12 + 0.12 * Math.abs(Math.sin(t * 4.4 + i * 0.5))));
+    band[i] += (Math.min(1, v) - band[i]) * (v > band[i] ? 0.5 : 0.13);
+  }
+  const base = 0.34 + 0.34 * Math.exp(-beat * 8) + 0.08 * Math.sin(t * 1.1);
+  lvL += (base + 0.06 * Math.sin(t * 2.3) - lvL) * 0.3;
+  lvR += (base + 0.06 * Math.sin(t * 2.3 + 1.2) - lvR) * 0.3;
+  beatE = Math.max(beatE - dt * 2.4, Math.exp(-beat * 8));
+  for (let i = 0; i < wav.length; i++) {
+    const xq = i / wav.length;
+    wav[i] = (Math.sin(xq * Math.PI * 6 + t * 4) * (0.36 + 0.3 * Math.exp(-beat * 8))
+            + Math.sin(xq * Math.PI * 15 + t * 2) * 0.16) * 0.9;
+  }
+  return true;
+}
+
 function readAudio(dt) {
-  if (!V.ok) return false;
+  if (!V.ok) return (S.deco && !au.paused) ? decoAudio(dt) : false;
   V.aL.getByteFrequencyData(V.fL); V.aR.getByteFrequencyData(V.fR);
   V.aL.getByteTimeDomainData(V.td);
   const n = V.fL.length;
@@ -1118,7 +1145,7 @@ const VD = {
     const mx = ox + S0 - u(0.055) - mw, rowH = u(0.052);
     /* 札が下にあるときは上へ逃がす */
     const my = (spot === 'br') ? oy + u(0.14) : oy + u(0.845);
-    const live = V.ok;
+    const live = V.ok || (S.deco && !au.paused);
     if (live) {
     x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
     [['L', lvL], ['R', lvR]].forEach((row, ri) => {
@@ -1361,7 +1388,9 @@ function screenNow() {
        通れば解析でき、通らなければ元に戻す（音は止めない）。 */
     if (!own && !(await canAnalyse()) && !(await tryCors())) {
       $('#nmsg').className = 'msg';
-      $('#nmsg').textContent = 'この曲は pCloud が中身を読ませないので、レベル計は出ません（絵は動きます）';
+      $('#nmsg').textContent = S.deco
+        ? '本物の音量は出せない曲です（pCloud が中身を読ませないため）。いまは飾りとして動かしています'
+        : 'この曲は pCloud が中身を読ませないので、レベル計は止まったままです（⚙ で飾りとして動かせます）';
       note('解析しない（読めない音）');
       return;
     }
@@ -1384,8 +1413,17 @@ function screenVis() {
         <span class="nm">${VIS[k][0]}${VIS[k][1] ? '' : '<br><span class="sub">音の解析が要りません。何があっても動きます</span>'}</span>
         <span class="chk ${S.vis.includes(k) ? 'on' : ''}">${S.vis.includes(k) ? '✓' : ''}</span>
       </button>`).join('')}</div>
-    <div class="note" style="padding:0 2px">選んだものを、再生画面で触るたびに順に切り替えます。
-    解析が要るものは、直に流している音では動かないことがあります（端末に入れた曲なら確実に動きます）。</div>`;
+    <div class="rowlist" style="margin-top:14px">
+      <button class="row" id="deco">
+        <span class="nm">音が読めないときも動かす<br>
+          <span class="sub">pCloud から直に流している音は中身を読めないので、本物の音量は出せません。
+          入にすると<b>曲に合わせた飾り</b>として動かします（本物の波形ではありません）。
+          切ると止まったままになります。</span></span>
+        <span class="chk ${S.deco ? 'on' : ''}">${S.deco ? '✓' : ''}</span>
+      </button>
+    </div>
+    <div class="note" style="padding:12px 2px 0">選んだものを、再生画面で触るたびに順に切り替えます。</div>`;
+  $('#deco').onclick = () => { S.deco = !S.deco; LS.set('deco', S.deco); screenVis(); };
   main().querySelectorAll('[data-v]').forEach(b => b.onclick = () => {
     const k = b.dataset.v;
     S.vis = S.vis.includes(k) ? S.vis.filter(x => x !== k) : S.vis.concat(k);
@@ -2956,7 +2994,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v49');
+  L.push('版: v50');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
