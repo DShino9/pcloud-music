@@ -795,8 +795,12 @@ function guardSilence(t) {
     }
   }, 2600);
 }
+let playSeq = 0;
 async function playAt(qi) {
   if (qi < 0 || qi >= P.q.length) return;
+  /* 場所を調べる間に別の曲が選ばれることがある。古い方が後から src を入れると、
+     表示と違う曲が鳴る（列に無い曲が次々流れて見える）。番号で見張る。 */
+  const seq = ++playSeq;
   P.qi = qi;
   const { al, i } = P.q[qi];
   const t = al.tracks[i];
@@ -851,18 +855,22 @@ async function playAt(qi) {
       soPipe = !!so.pipe;
     }
   } catch (e) {
+    if (seq !== playSeq) return;                 /* もう別の曲に移っている */
     note('場所が分からない: ' + (e.code != null ? 'code=' + e.code + ' ' : '') + (e.message || e));
     toast('曲の場所が分かりません: ' + (e.message || e), 5000);
     if (S.relay) diagnoseRelay(t);
     return;
   }
+  if (seq !== playSeq) { note('取り合いになったので古い方をやめた'); return; }
   try {
     if (au.src !== src) au.src = src;
     await au.play();
+    if (seq !== playSeq) return;
     pending = null;
     guardSilence(t);
     if (soPipe) { V.pipe = true; note('入口ごしで配れた（波形が出せる）'); }
   } catch (e) {
+    if (seq !== playSeq) return;
     note('鳴らせない: ' + e.name + ' ' + (e.message || ''));
     if (soPipe && V.pipe !== false) {
       /* 入口ごしが駄目だった。以後は端末が直に取りに行く。 */
@@ -879,6 +887,7 @@ async function playAt(qi) {
     }
     return;
   }
+  if (seq !== playSeq) return;
   remember(al, t);
   paintPlayer();
   setMediaSession();
@@ -3221,7 +3230,7 @@ function screenAlbum(id) {
         <h2>${esc(al.name)}</h2>
         <div class="a">${esc(artistOf(al))}</div>
         <div class="a">${esc([g, y, al.tracks.length + ' 曲', pc ? '聴いた ' + pc + ' 回' : ''].filter(Boolean).join(' · '))}</div>
-        ${moodOf(al) ? `<div class="a"><button class="tchip" id="amood">🌙 ${esc(moodLabel(moodOf(al)))}<b>この雰囲気で流す</b></button></div>` : ''}
+        ${moodOf(al) ? `<div class="a">雰囲気：${esc(moodLabel(moodOf(al)))}</div>` : ''}
         <div class="acts">
           <button class="hbtn" id="pall">▶ 通して聴く</button>
           <button class="hbtn" id="pshuf">🔀</button>
@@ -3229,6 +3238,7 @@ function screenAlbum(id) {
           <button class="hbtn" id="qnext">次に再生</button>
           <button class="hbtn" id="qend">列に足す</button>
           <button class="hbtn" id="cov">ジャケット</button>
+          ${moodOf(al) ? `<button class="hbtn" id="amood">🌙 この雰囲気で流す</button>` : ''}
 
         </div>
       </div>
@@ -4252,7 +4262,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v95');
+  L.push('版: v96');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
