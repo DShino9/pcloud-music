@@ -893,6 +893,44 @@ const VIS = {
 S.vis = LS.get('vis', ['art', 'disc', 'ladder', 'bars', 'ring']);
 if (!S.vis.includes('art')) { S.vis = ['art'].concat(S.vis); LS.set('vis', S.vis); }
 
+/* ジャケットのどこが「静か」かを見て、札を置く場所を決める。
+   決め打ちだと必ず一番良いところを隠す（実際に隠していた）。
+   32×32 に縮めて隣との差＝細かさを測り、いちばん細かくない場所を選ぶ。 */
+const salCache = new Map();
+function quietSpot(im, id) {
+  if (salCache.has(id)) return salCache.get(id);
+  let pick = 'br';
+  try {
+    const n = 32, c = document.createElement('canvas');
+    c.width = c.height = n;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(im, 0, 0, n, n);
+    const d = g.getImageData(0, 0, n, n).data;
+    const lum = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) lum[i] = (d[i*4]*0.299 + d[i*4+1]*0.587 + d[i*4+2]*0.114) / 255;
+    const e = new Float32Array(n * n);
+    for (let y = 1; y < n - 1; y++) for (let x = 1; x < n - 1; x++) {
+      const i = y * n + x;
+      e[i] = Math.abs(lum[i]-lum[i-1]) + Math.abs(lum[i]-lum[i+1])
+           + Math.abs(lum[i]-lum[i-n]) + Math.abs(lum[i]-lum[i+n]);
+    }
+    /* 盤は左下に居るので、そこは候補にしない */
+    const box = { br: [0.50,0.60,0.97,0.88], tr: [0.50,0.30,0.97,0.58],
+                  mr: [0.46,0.42,0.97,0.70], tc: [0.36,0.22,0.97,0.50] };
+    let best = Infinity;
+    for (const [k, r] of Object.entries(box)) {
+      let sum = 0, cnt = 0;
+      for (let y = Math.floor(r[1]*n); y < Math.ceil(r[3]*n); y++)
+        for (let x = Math.floor(r[0]*n); x < Math.ceil(r[2]*n); x++) { sum += e[y*n+x]; cnt++; }
+      const v = sum / Math.max(1, cnt);
+      if (v < best) { best = v; pick = k; }
+    }
+  } catch (err) { /* 読めない絵は既定の位置で */ }
+  salCache.set(id, pick);
+  return pick;
+}
+const BOXES = { br: [0.50,0.60], tr: [0.50,0.30], mr: [0.46,0.42], tc: [0.36,0.22] };
+
 const VD = {
   /* お手本（大航海時代の盤）の作りをそのまま起こす。
        ① ジャケットを背景に敷く
@@ -917,8 +955,11 @@ const VD = {
     x.arcTo(ox, oy, ox + S0, oy, rr); x.closePath(); x.clip();
 
     /* ① 背景 */
-    if (ok) x.drawImage(im, ox, oy, S0, S0);
-    else { x.fillStyle = '#132436'; x.fillRect(ox, oy, S0, S0); }
+    if (ok) {
+      /* お手本の元絵も左右が切られている。わずかに寄せて縁を落とす。 */
+      const zm = S0 * 1.08, dx = ox - (zm - S0) / 2, dy = oy - (zm - S0) / 2;
+      x.drawImage(im, dx, dy, zm, zm);
+    } else { x.fillStyle = '#132436'; x.fillRect(ox, oy, S0, S0); }
 
     /* ② 左の水色の帯。奥のジャケットを透かしつつ、白文字が読める濃さにする */
     const bandW = u(0.40);
@@ -994,8 +1035,10 @@ const VD = {
     x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
 
     /* ⑤ 盤の右の札。アーティストと曲名 */
-    const px = ox + u(0.50), pw = S0 - u(0.50) - u(0.045);
-    const ph = u(0.235), py = oy + u(0.455);
+    const spot = ok ? quietSpot(im, al.id) : 'br';
+    const bx = BOXES[spot] || BOXES.br;
+    const px = ox + u(bx[0]), pw = S0 - u(bx[0]) - u(0.04);
+    const ph = u(0.235), py = oy + u(bx[1]);
     x.fillStyle = 'rgba(226,222,196,.93)';
     x.fillRect(px, py, pw, ph);
     x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
@@ -1024,7 +1067,9 @@ const VD = {
     /* ⑥ 左下の L／R */
     const n = 24, gap = u(0.0135), bw = Math.max(1.5, u(0.0062));
     const mw = u(0.05) + n * gap;
-    const mx = ox + S0 - u(0.055) - mw, my = oy + u(0.845), rowH = u(0.052);
+    const mx = ox + S0 - u(0.055) - mw, rowH = u(0.052);
+    /* 札が下にあるときは上へ逃がす */
+    const my = (spot === 'br') ? oy + u(0.14) : oy + u(0.845);
     const live = V.ok;
     x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
     [['L', lvL], ['R', lvR]].forEach((row, ri) => {
@@ -2780,7 +2825,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v45');
+  L.push('版: v46');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
