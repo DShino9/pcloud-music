@@ -2506,7 +2506,10 @@ const pathKey = al => nfc(String(al.path || '').split(' / ').slice(1).join('/'))
 
 /* 集めたジャケットは、置き場に上げなくても届くようにしておく。
    端末を変えても、控えを入れ忘れても、開けば付いている。 */
+let shippedDone = false;
 async function loadShippedCovers() {
+  if (shippedDone) return 0;
+  shippedDone = true;
   try {
     const r = await fetch('./ジャケット.json', { cache: 'no-cache' });
     if (!r.ok) return 0;
@@ -2792,6 +2795,11 @@ async function screenLib() {
         <button class="hbtn" onclick="location.hash='#/pick/0'">フォルダを選び直す</button></div>`;
       return;
     }
+  }
+  /* 同梱のジャケットは毎回当てにいく。フォルダを選び直した人にしか配って
+     いなかったので、既に使っている人には一生届かなかった。 */
+  if (!shippedDone && S.albums.length) {
+    loadShippedCovers().then(n => { if (n && location.hash === mine) screenLib(); });
   }
   if (location.hash !== mine) return;      /* 棚を読む間に移っていたら書かない */
   const sw = S.sweep ? `<div class="sweep"><div class="bar"><i id="swbar"></i></div>
@@ -4228,7 +4236,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v88');
+  L.push('版: v89');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
