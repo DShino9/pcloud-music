@@ -3756,6 +3756,7 @@ function screenMenu() {
       ${GATE ? `<button class="row" id="leave"><span class="nm">この端末を外す</span><span class="sub">合言葉を入れ直すまで</span></button>` : `<button class="row" id="code"><span class="nm">共有リンク</span><span class="sub">${S.code ? '設定済み' : '未設定'}</span></button>`}
       <button class="row" id="relay"><span class="nm">中継所</span><span class="sub">${S.relay ? '設定済み' : '未設定'}</span></button>
       <button class="row" id="routes"><span class="nm">取り出し方を調べる</span><span class="sub">再生できないとき</span></button>
+      <button class="row" id="reship"><span class="nm">同梱のジャケットを入れ直す</span><span class="sub">手で選んだものは残します</span></button>
       <button class="row" id="moodgo"><span class="nm">雰囲気を測る</span><span class="sub">${Object.keys(S.mood).length} 枚</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
       <button class="row" id="juke"><span class="nm">ジュークボックス</span><span class="sub">札で選ぶ</span></button>
@@ -3786,6 +3787,18 @@ function screenMenu() {
   const cd2 = $('#code'); if (cd2) cd2.onclick = () => go('#/code');
   $('#relay').onclick  = () => go('#/relay');
   $('#routes').onclick = () => go('#/routes');
+  $('#reship').onclick = async () => {
+    if (!confirm('自動で付いたジャケットを、同梱のもので入れ直します。手で選んだものは残ります。')) return;
+    let n = 0;
+    for (const al of S.albums) {
+      const c = S.covers[al.id];
+      if (c && !c.manual) { delete S.covers[al.id]; n++; }
+    }
+    saveCovers(); shippedDone = false;
+    const got = await loadShippedCovers();
+    toast(`${n} 枚を外し、${got} 枚を当て直しました`, 4000);
+    go('#/lib');
+  };
   $('#moodgo').onclick = () => sweepMood();
   $('#meta').onclick  = () => sweepMeta();
   $('#juke').onclick  = () => go('#/juke');
@@ -4236,7 +4249,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v89');
+  L.push('版: v90');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
