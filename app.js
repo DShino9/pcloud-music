@@ -11,9 +11,16 @@ const GATE = !/(^|\.)github\.io$/.test(location.hostname) && location.protocol =
 async function gate(path) {
   const r = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new PCloudError(j.result || -10, j.error || ('入口が ' + r.status));
+  if (!r.ok) {
+    const e = new PCloudError(j.result || -10, j.error || ('入口が ' + r.status));
+    e.http = r.status;
+    throw e;
+  }
   return j;
 }
+/* 古い入口には符号を渡す口が無い。その場合は入口に代わりに叩いてもらう。
+   貼り替えを頼まなくても、新旧どちらでも動くようにしておく。 */
+let oldGate = false;
 
 const AUDIO_EXT = new Set(['mp3','m4a','aac','flac','wav','ogg','opus','aiff','aif','wma','m4b']);
 const IMAGE_EXT = new Set(['jpg','jpeg','png','webp','gif']);
@@ -156,16 +163,31 @@ async function api(method, params = {}, host, ms = 25000) {
    耳読が Mac 無しで鳴るのはこの道を通っているから。 */
 let memCode = null;      /* 入口からもらった符号。保存しない。閉じれば消える。 */
 async function getCode(force) {
+  if (oldGate) throw new PCloudError(-11, '古い入口（符号を渡す口が無い）');
   if (memCode && !force) return memCode;
   if (force) memCode = null;
-  const g = await gate('/api/code');
+  let g;
+  try { g = await gate('/api/code'); }
+  catch (e) {
+    if (e.http === 404) { oldGate = true; note('古い入口。代わりに叩いてもらう道に切り替える'); }
+    throw e;
+  }
   memCode = { code: g.code, linkpw: g.linkpw || '' };
   if (g.host) S.host = g.host;
   note('入口から符号を受け取った（保存しない）');
   return memCode;
 }
 async function apiPub(method, params = {}, ms = 25000) {
-  const cd = GATE ? await getCode() : { code: S.code, linkpw: S.linkpw };
+  /* 古い入口のとき（符号を貰えないとき）は、入口に代わりに叩いてもらう。 */
+  if (GATE && oldGate) return apiViaGate(method, params);
+  let cd;
+  if (GATE) {
+    try { cd = await getCode(); }
+    catch (e) {
+      if (oldGate) return apiViaGate(method, params);
+      throw e;
+    }
+  } else cd = { code: S.code, linkpw: S.linkpw };
   const u = new URL('https://' + S.host + '/' + method);
   u.searchParams.set('code', cd.code);
   if (cd.linkpw) u.searchParams.set('linkpassword', cd.linkpw);
@@ -183,6 +205,20 @@ async function apiPub(method, params = {}, ms = 25000) {
   const j = await r.json();
   if (j.result !== 0) throw new PCloudError(j.result, j.error);
   return j;
+}
+
+/* 古い入口ごしの道。棚とリンクだけは代わりに叩いてもらえる。 */
+async function apiViaGate(method, params) {
+  if (method === 'showpublink') {
+    const g = await gate('/api/shelf');
+    return { result: 0, metadata: g.metadata };
+  }
+  if (method === 'getpublinkdownload') {
+    const g = await gate('/api/link?fileid=' + encodeURIComponent(params.fileid));
+    const u = new URL(g.url);
+    return { result: 0, hosts: [u.host], path: u.pathname + u.search };
+  }
+  throw new PCloudError(-12, '古い入口ではこの操作はできません: ' + method);
 }
 
 /* 画像は API に auth を載せた URL をそのまま <img> に渡す（往復が1回で済む） */
@@ -4606,7 +4642,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v118');
+  L.push('版: v119');
+  L.push('入口の型: ' + (oldGate ? '古い（代わりに叩いてもらう）' : '新しい（符号を受け取る）'));
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
