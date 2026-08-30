@@ -3198,6 +3198,7 @@ function screenAlbum(id) {
         <h2>${esc(al.name)}</h2>
         <div class="a">${esc(artistOf(al))}</div>
         <div class="a">${esc([g, y, al.tracks.length + ' 曲', pc ? '聴いた ' + pc + ' 回' : ''].filter(Boolean).join(' · '))}</div>
+        ${moodOf(al) ? `<div class="a"><button class="tchip" id="amood">🌙 ${esc(moodLabel(moodOf(al)))}<b>この雰囲気で流す</b></button></div>` : ''}
         <div class="acts">
           <button class="hbtn" id="pall">▶ 通して聴く</button>
           <button class="hbtn" id="pshuf">🔀</button>
@@ -3211,10 +3212,19 @@ function screenAlbum(id) {
     </div>
     <div>${al.tracks.map((t, i) => `
       <div class="tk ${P.album && P.album.id === al.id && P.i === i ? 'playing' : ''} ${S.offline[t.id] ? 'cached' : ''}">
-        <button class="hit" data-i="${i}"><span class="n">${i + 1}</span><span class="nm">${esc(trackTitle(t))}</span></button>
+        <button class="hit" data-i="${i}"><span class="n">${i + 1}</span><span class="nm">${esc(trackTitle(t))}</span>${
+          (tmoodOf(al, i) || []).length ? `<span class="tg">${esc((tmoodOf(al, i) || []).join('・'))}</span>` : ''}</button>
         <button class="star ${isFav('t' + t.id) ? 'on' : ''}" data-star="${t.id}">${isFav('t' + t.id) ? '★' : '☆'}</button>
         <button class="dots" data-tmenu="${i}">⋮</button>
       </div>`).join('')}</div>`;
+  const am = $('#amood');
+  if (am) am.onclick = () => {
+    const g2 = tmoodOf(al, 0);
+    if (g2 && g2.length) { playByTags(g2, { al, i: 0 }); return; }
+    const q = moodQueue(al);
+    if (!q.length) { toast('近い雰囲気の盤が見つかりません', 3000); return; }
+    startQueue([{ al, i: 0 }].concat(q), 0); go('#/queue');
+  };
   main().querySelectorAll('[data-i]').forEach(b => b.onclick = () => play(al, +b.dataset.i));
   main().querySelectorAll('[data-tmenu]').forEach(b => b.onclick = () => trackSheet(al, +b.dataset.tmenu));
   main().querySelectorAll('[data-star]').forEach(b => b.onclick = () => {
@@ -4142,7 +4152,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v83');
+  L.push('版: v84');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
@@ -4440,5 +4450,6 @@ if ('serviceWorker' in navigator) {
 }
 LS.del('link'); LS.del('cors');   /* 前の版が残した判定は捨てる */
 document.body.dataset.cell = S.cell;
+loadTMood().then(() => { if (/^#\/(album|lib|moods)/.test(location.hash || '')) renderRoute(); });
 renderRoute();
 paintPlayer();
