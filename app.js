@@ -1493,7 +1493,7 @@ const VD = {
     /* ④ 盤 */
     /* 左下から差し込む。ただし中心の穴が画面に入る位置に置く。
        穴が見えないと、これが CD だと分からない。 */
-    const dr = u(0.46), cx = ox + u(0.26), cy = oy + u(0.80);
+    const dr = u(0.50), cx = ox + u(0.13), cy = oy + u(0.87);
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
@@ -4270,7 +4270,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v100');
+  L.push('版: v101');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4321,11 +4321,17 @@ function jukeMoodList() {
 }
 const jbCode = i => String.fromCharCode(65 + Math.floor(i / 5)) + ((i % 5) + 1);
 
-/* 演奏機構の窓。本物のジュークボックスは、掛かる盤が見えるのが値打ち。 */
-function wireMech() {
-  const cv = $('#jbmech'); if (!cv) return;
+/* 前面の板。木の枠に銅の輪、赤と青のネオン、真鍮の銘板。
+   盤は回り、針は曲の進みに合わせて内へ寄る。ネオンはちらつく。
+   絵の切り出しは使わず、全部その場で描く。 */
+function wireFront() {
+  const cv = $('#jbfront'); if (!cv) return;
   const x = cv.getContext('2d');
-  let arm = 0;
+  let t0 = 0;
+  const noise = (t, k) => {                       /* ちらつき。規則的だと嘘くさい */
+    const a = Math.sin(t * 11.3 + k * 2.1), b2 = Math.sin(t * 3.7 + k * 5.3);
+    return 0.5 + 0.5 * (a * 0.6 + b2 * 0.4);
+  };
   const step = () => {
     if (location.hash !== '#/juke' || !document.body.contains(cv)) return;
     const dpr = Math.min(2, devicePixelRatio || 1);
@@ -4333,88 +4339,175 @@ function wireMech() {
     if (!w || !h) { requestAnimationFrame(step); return; }
     if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
     x.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const c = cur();
-    const playing = c && !au.paused;
-    /* 箱の中。奥は暗い */
-    const bg = x.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0, '#1d1014'); bg.addColorStop(1, '#0d0709');
-    x.fillStyle = bg; x.fillRect(0, 0, w, h);
-    /* 控えの盤。奥に何枚も立てて並ぶ */
-    for (let i = 0; i < 12; i++) {
-      const px = w * 0.04 + i * h * 0.055;
-      x.fillStyle = i % 2 ? 'rgba(34,29,31,.95)' : 'rgba(19,16,18,.95)';
-      x.fillRect(px, h * 0.12, h * 0.030, h * 0.72);
-      x.fillStyle = 'rgba(255,255,255,.05)';
-      x.fillRect(px, h * 0.12, h * 0.006, h * 0.72);
+    t0 += 0.016;
+    const u = Math.min(w, h);
+    const c = cur(), playing = c && !au.paused;
+    const prog = (au.duration ? au.currentTime / au.duration : 0) || 0;
+
+    /* 木の台 */
+    const wood = x.createLinearGradient(0, 0, 0, h);
+    wood.addColorStop(0, '#3a2418'); wood.addColorStop(.5, '#2a1a12'); wood.addColorStop(1, '#1d1009');
+    x.fillStyle = wood; x.fillRect(0, 0, w, h);
+    x.save(); x.globalAlpha = 0.10;
+    for (let i = 0; i < h; i += 3) {
+      x.strokeStyle = i % 6 ? '#7a4a2c' : '#150c07';
+      x.beginPath(); x.moveTo(0, i + Math.sin(i * 0.3) * 1.5); x.lineTo(w, i + Math.sin(i * 0.3 + 1) * 1.5);
+      x.stroke();
     }
-    /* 受け皿。寸法は高さで決める（窓は横長なので幅では合わない） */
-    const R = h * 0.52, cx = w - R * 1.45, cy = h * 0.56;
+    x.restore();
+
+    /* 銅の外枠 */
+    const pad = u * 0.035, rr = u * 0.03;
+    const frame = (inset, lw, g1, g2) => {
+      const gg = x.createLinearGradient(0, 0, w, h);
+      gg.addColorStop(0, g1); gg.addColorStop(.5, g2); gg.addColorStop(1, g1);
+      x.strokeStyle = gg; x.lineWidth = lw;
+      x.beginPath(); x.roundRect(inset, inset, w - inset * 2, h - inset * 2, rr); x.stroke();
+    };
+    frame(pad, u * 0.020, '#5a3a22', '#c98a4e');
+    frame(pad + u * 0.016, u * 0.006, '#3a2414', '#8a5c34');
+
+    /* ネオン。左右で赤と青を入れ替える */
+    const cx = w / 2, cy = h * 0.50, R = u * 0.305;
+    /* 実物のネオンは、縦に走って上下で内へ折り返す。丸みは大きく取る。 */
+    const tube = (side, col, off, key) => {
+      const f = noise(t0, key);
+      const on = f > 0.20;                         /* たまに落ちる */
+      const a = on ? (0.6 + f * 0.4) : 0.08;
+      const sx = cx + side * (R * 1.14 + u * (0.055 + off));
+      const top = cy - R * 1.02, bot = cy + R * 1.02;
+      const hook = u * 0.085;
+      x.save();
+      x.lineCap = 'round'; x.lineJoin = 'round';
+      x.beginPath();
+      x.moveTo(sx - side * hook, top - u * 0.02);
+      x.quadraticCurveTo(sx, top - u * 0.02, sx, top + u * 0.05);
+      x.lineTo(sx, bot - u * 0.05);
+      x.quadraticCurveTo(sx, bot + u * 0.02, sx - side * hook, bot + u * 0.02);
+      x.shadowColor = col; x.shadowBlur = u * 0.07 * a;
+      x.strokeStyle = col; x.globalAlpha = a * 0.5; x.lineWidth = u * 0.040; x.stroke();
+      x.shadowBlur = u * 0.035 * a;
+      x.strokeStyle = col; x.globalAlpha = a * 0.8; x.lineWidth = u * 0.022; x.stroke();
+      x.shadowBlur = 0;
+      x.strokeStyle = '#fff'; x.globalAlpha = a * 0.9; x.lineWidth = u * 0.007; x.stroke();
+      x.restore();
+    };
+    tube(-1, '#ff3b30', 0.000, 1); tube(-1, '#3aa0ff', 0.062, 2);
+    tube(+1, '#3aa0ff', 0.000, 3); tube(+1, '#ff3b30', 0.062, 4);
+
+    /* 銅の受け皿 */
+    x.save();
+    const ring = x.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
+    ring.addColorStop(0, '#8a5a34'); ring.addColorStop(.45, '#e0a468');
+    ring.addColorStop(.55, '#b5773f'); ring.addColorStop(1, '#6d431f');
+    x.beginPath(); x.arc(cx, cy, R * 1.14, 0, 7);
+    x.strokeStyle = ring; x.lineWidth = u * 0.062; x.stroke();
+    x.beginPath(); x.arc(cx, cy, R * 1.14, 0, 7);
+    x.strokeStyle = 'rgba(0,0,0,.45)'; x.lineWidth = 1; x.stroke();
+    for (let i = 0; i < 12; i++) {                 /* 留めねじ */
+      const a2 = i / 12 * Math.PI * 2 + 0.26;
+      const sx = cx + Math.cos(a2) * R * 1.14, sy = cy + Math.sin(a2) * R * 1.14;
+      x.beginPath(); x.arc(sx, sy, u * 0.008, 0, 7);
+      x.fillStyle = '#d9b184'; x.fill();
+      x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 1; x.stroke();
+    }
+    x.restore();
+
+    /* 盤 */
     x.save(); x.translate(cx, cy);
-    x.beginPath(); x.ellipse(0, R * 0.10, R * 1.06, R * 0.42, 0, 0, 7);
-    x.fillStyle = 'rgba(0,0,0,.55)'; x.fill();
-    /* 盤（少し伏せて見える） */
-    x.save(); x.scale(1, 0.38);
-    if (playing) arm += 0.06;
-    x.rotate(arm);
+    x.beginPath(); x.arc(0, u * 0.006, R, 0, 7); x.fillStyle = 'rgba(0,0,0,.5)'; x.fill();
+    x.rotate(spin);
     x.beginPath(); x.arc(0, 0, R, 0, 7);
-    const vb = x.createRadialGradient(-R * 0.3, -R * 0.3, R * 0.05, 0, 0, R);
-    vb.addColorStop(0, '#2c2a2a'); vb.addColorStop(.5, '#161516'); vb.addColorStop(1, '#0a0a0b');
+    const vb = x.createRadialGradient(-R * .3, -R * .3, R * .05, 0, 0, R);
+    vb.addColorStop(0, '#2b2a2b'); vb.addColorStop(.5, '#161516'); vb.addColorStop(1, '#0a0a0b');
     x.fillStyle = vb; x.fill();
-    for (let i = 0; i < 70; i++) {
-      x.beginPath(); x.arc(0, 0, R * (0.40 + i * 0.0082), 0, 7);
-      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.5)';
+    for (let i = 0; i < 150; i++) {
+      x.beginPath(); x.arc(0, 0, R * (0.36 + i * 0.00426), 0, 7);
+      x.strokeStyle = i % 2 ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.45)';
       x.lineWidth = 1; x.stroke();
     }
-    /* ラベル。掛かっている盤のジャケットを刷る */
+    /* ラベル。ジャケットをくすませて敷き、題を重ねる */
+    const LR = R * 0.34;
     x.save();
-    x.beginPath(); x.arc(0, 0, R * 0.36, 0, 7); x.clip();
-    x.fillStyle = c ? '#d8b978' : '#8a7a5e';
-    x.fillRect(-R, -R, R * 2, R * 2);
-    if (c) {
-      const lim = coverImage(c.al);
-      if (lim && lim.complete && lim.naturalWidth) {
-        const z = R * 0.36;
-        x.drawImage(lim, -z, -z, z * 2, z * 2);
-      }
+    x.beginPath(); x.arc(0, 0, LR, 0, 7); x.clip();
+    x.fillStyle = '#efe6d2'; x.fillRect(-LR, -LR, LR * 2, LR * 2);
+    const lim = c ? coverImage(c.al) : null;
+    if (lim && lim.complete && lim.naturalWidth) {
+      x.save();
+      try { x.filter = 'grayscale(70%) sepia(35%) brightness(1.05)'; } catch (e) {}
+      x.globalAlpha = 0.88;
+      x.drawImage(lim, -LR, -LR, LR * 2, LR * 2);
+      x.restore();
     }
+    x.fillStyle = 'rgba(250,244,232,.72)'; x.fillRect(-LR, -LR * 0.34, LR * 2, LR * 0.68);
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    let fs = LR * 0.30;
+    const nm = c ? cleanName(c.al.name) : '音楽棚';
+    x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
+    while (x.measureText(nm).width > LR * 1.7 && fs > LR * 0.14) {
+      fs *= 0.9; x.font = '700 ' + fs + 'px "Hiragino Sans",-apple-system,sans-serif';
+    }
+    x.fillStyle = '#2a1c10'; x.fillText(nm, 0, -LR * 0.10);
+    x.font = (LR * 0.20) + 'px "Hiragino Sans",-apple-system,sans-serif';
+    x.fillStyle = 'rgba(60,40,24,.9)';
+    x.fillText((c ? (artistOf(c.al) || '') : '').slice(0, 14), 0, LR * 0.28);
+    x.textAlign = 'left'; x.textBaseline = 'alphabetic';
     x.restore();
-    x.beginPath(); x.arc(0, 0, R * 0.36, 0, 7);
-    x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 1; x.stroke();
-    x.beginPath(); x.arc(0, 0, R * 0.035, 0, 7);
-    x.fillStyle = '#0b0a0c'; x.fill();
+    x.beginPath(); x.arc(0, 0, LR, 0, 7);
+    x.strokeStyle = 'rgba(0,0,0,.45)'; x.lineWidth = 1; x.stroke();
+    x.beginPath(); x.arc(0, 0, R * 0.028, 0, 7); x.fillStyle = '#0b0a0c'; x.fill();
     x.restore();
     /* 艶 */
-    x.save(); x.scale(1, 0.38);
-    x.beginPath(); x.arc(0, 0, R, 0, 7); x.clip();
+    x.save(); x.beginPath(); x.arc(cx, cy, R, 0, 7); x.clip();
     x.globalCompositeOperation = 'screen';
-    const sh = x.createLinearGradient(-R, -R, R * 0.4, R);
-    sh.addColorStop(.42, 'rgba(255,240,210,0)');
-    sh.addColorStop(.50, 'rgba(255,240,210,.20)');
-    sh.addColorStop(.58, 'rgba(255,240,210,0)');
-    x.fillStyle = sh; x.fillRect(-R, -R, R * 2, R * 2);
+    const sh = x.createLinearGradient(cx - R, cy - R, cx + R * .4, cy + R);
+    sh.addColorStop(.40, 'rgba(255,244,224,0)');
+    sh.addColorStop(.50, 'rgba(255,244,224,.17)');
+    sh.addColorStop(.60, 'rgba(255,244,224,0)');
+    x.fillStyle = sh; x.fillRect(cx - R, cy - R, R * 2, R * 2);
+    x.restore();
+
+    /* 針。曲の進みに合わせて内へ寄る。止まっていれば外へ上げる */
+    const px = cx + R * 0.98, py = cy - R * 0.86;
+    const a0 = playing ? (2.30 - prog * 0.34) : 2.68;
+    x.save(); x.translate(px, py); x.rotate(a0);
+    const arm = x.createLinearGradient(0, -u * .014, 0, u * .014);
+    arm.addColorStop(0, '#f0d5b0'); arm.addColorStop(.45, '#c08f5e'); arm.addColorStop(1, '#6d4a2a');
+    x.strokeStyle = arm; x.lineWidth = u * 0.022; x.lineCap = 'round';
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(R * 0.94, 0); x.stroke();
+    /* 頭の部分 */
+    x.save(); x.translate(R * 0.94, 0); x.rotate(0.35);
+    const hg = x.createLinearGradient(0, -u * .03, 0, u * .03);
+    hg.addColorStop(0, '#e9d9c0'); hg.addColorStop(1, '#9a7c5a');
+    x.fillStyle = hg;
+    x.beginPath(); x.roundRect(-u * 0.02, -u * 0.030, u * 0.075, u * 0.060, u * 0.008); x.fill();
+    x.strokeStyle = 'rgba(0,0,0,.45)'; x.lineWidth = 1; x.stroke();
+    x.fillStyle = '#2e2116';
+    x.fillRect(u * 0.048, -u * 0.006, u * 0.016, u * 0.012);
     x.restore();
     x.restore();
-    /* 腕。掛かっていれば盤の上に降りる */
-    const ax = cx + R * 1.25, ay = cy - R * 0.75, AL = R * 1.30;
-    const a2 = playing ? 0.72 : 0.30;
-    x.save(); x.translate(ax, ay); x.rotate(Math.PI - a2);
-    x.strokeStyle = '#a8a29a'; x.lineWidth = Math.max(2, h * 0.018);
-    x.beginPath(); x.moveTo(0, 0); x.lineTo(AL, 0); x.stroke();
-    x.strokeStyle = 'rgba(255,255,255,.35)'; x.lineWidth = Math.max(1, h * 0.005);
-    x.beginPath(); x.moveTo(0, -h * 0.005); x.lineTo(AL, -h * 0.005); x.stroke();
-    x.fillStyle = '#e8e2d6';
-    x.fillRect(AL - h * 0.02, -h * 0.022, h * 0.055, h * 0.044);
-    x.restore();
-    x.beginPath(); x.arc(ax, ay, Math.max(4, h * 0.055), 0, 7);
-    const pv = x.createRadialGradient(ax - h * 0.02, ay - h * 0.02, 1, ax, ay, h * 0.055);
-    pv.addColorStop(0, '#cfc9c0'); pv.addColorStop(1, '#6f6960');
-    x.fillStyle = pv; x.fill();
+    const pv = x.createRadialGradient(px - u * .010, py - u * .010, 1, px, py, u * 0.036);
+    pv.addColorStop(0, '#f0dcc0'); pv.addColorStop(1, '#8a6238');
+    x.beginPath(); x.arc(px, py, u * 0.036, 0, 7); x.fillStyle = pv; x.fill();
     x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 1; x.stroke();
-    /* 灯り */
-    const gl = x.createRadialGradient(cx, cy - h * 0.1, 0, cx, cy - h * 0.1, w * 0.6);
-    gl.addColorStop(0, `rgba(255,176,58,${playing ? 0.14 : 0.05})`);
-    gl.addColorStop(1, 'rgba(255,176,58,0)');
-    x.fillStyle = gl; x.fillRect(0, 0, w, h);
+
+    /* 真鍮の銘板 */
+    const plate = (bx, by, bw, bh, txt, size) => {
+      const g2 = x.createLinearGradient(bx, by, bx, by + bh);
+      g2.addColorStop(0, '#e8c98c'); g2.addColorStop(.5, '#c9a35e'); g2.addColorStop(1, '#a37f42');
+      x.beginPath(); x.roundRect(bx, by, bw, bh, bh * 0.16);
+      x.fillStyle = g2; x.fill();
+      x.strokeStyle = 'rgba(60,40,20,.7)'; x.lineWidth = 1; x.stroke();
+      x.fillStyle = '#3a2a12'; x.textAlign = 'center'; x.textBaseline = 'middle';
+      let fs2 = size;
+      x.font = '600 ' + fs2 + 'px Georgia,"Hiragino Mincho ProN",serif';
+      while (x.measureText(txt).width > bw * 0.86 && fs2 > 6) {
+        fs2 *= 0.92; x.font = '600 ' + fs2 + 'px Georgia,"Hiragino Mincho ProN",serif';
+      }
+      x.fillText(txt, bx + bw / 2, by + bh / 2);
+      x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+    };
+    plate(cx - u * 0.20, h * 0.040, u * 0.40, u * 0.072, 'C U S T O M   J U K E   B O X', u * 0.032);
     requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
@@ -4430,12 +4523,8 @@ function screenJuke() {
   const c = cur();
   main().innerHTML = `
     <div class="jb"><div class="cab">
-      <div class="arch">
-        <div class="tube"></div><div class="tube b"></div>
-        <div class="name">音楽棚</div>
-      </div>
+      <div class="panel"><canvas id="jbfront"></canvas></div>
       <div class="win">
-        <div class="mechbox"><canvas id="jbmech"></canvas></div>
         <div class="now2">
           ${c && coverOf(c.al) ? `<img src="${esc(coverOf(c.al))}">` : '<img alt="">'}
           <div class="t3">
@@ -4483,7 +4572,7 @@ function screenJuke() {
       <div class="foot">${pool.length ? '札を押すとその盤が掛かります。キーボードなら A1 … D5 の番号でも選べます。'
                                         : 'この選び方に当てはまる盤がありません。上の二つを戻してください。'}</div>
     </div></div>`;
-  wireMech();
+  wireFront();
   const reset = () => { JB.page = 0; JB.pick = ''; screenJuke(); };
   $('#jgen').onchange  = e => { JB.genre = e.target.value; LS.set('jbgenre', JB.genre); reset(); };
   $('#jmood').onchange = e => { JB.mood  = e.target.value; LS.set('jbmood',  JB.mood);  reset(); };
