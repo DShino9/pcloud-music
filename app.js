@@ -84,12 +84,16 @@ const S = {
   pub:    LS.get('pub', false),     // 公開リンク経由にするか
   sweep:  null,
 };
-const saveMeta  = () => LS.set('meta', S.meta);
-const saveFav   = () => LS.set('fav', S.fav);
-const savePlays = () => LS.set('plays', S.plays);
-const saveLists = () => LS.set('lists', S.lists);
-const saveMood  = () => LS.set('mood', S.mood);
-const saveHist  = () => LS.set('hist', S.hist.slice(0, 400));
+/* 端末に書いたら、pCloud にも上げる。
+   決まりごと：**ログインさえすれば、どこでも自分の環境が出る。**
+   端末に残すのは 認証系 と、毎回取ると重いもの（曲の実体・この端末に落とした印・音量）だけ。
+   上げるのは一拍おいてから（cloudSoon）。★を10個続けて付けても、上がるのは一度。 */
+const saveMeta  = () => { LS.set('meta', S.meta);   cloudSoon(); };
+const saveFav   = () => { LS.set('fav', S.fav);     cloudSoon(); };
+const savePlays = () => { LS.set('plays', S.plays); cloudSoon(); };
+const saveLists = () => { LS.set('lists', S.lists); cloudSoon(); };
+const saveMood  = () => { LS.set('mood', S.mood);   cloudSoon(); };
+const saveHist  = () => { LS.set('hist', S.hist.slice(0, 400)); cloudSoon(); };
 const isFav = k => !!S.fav[k];
 function toggleFav(k) { if (S.fav[k]) delete S.fav[k]; else S.fav[k] = 1; saveFav(); }
 const albumYear  = al => (S.meta[al.id] || {}).y || '';
@@ -107,7 +111,8 @@ function note(what) {
 }
 const readLog = () => (LS.get('log', []).join('\n') || '（記録なし）');
 
-const saveCovers  = () => LS.set('covers', S.covers);
+const saveCovers  = () => { LS.set('covers', S.covers); cloudSoon(); };
+/* オフラインの印は端末ごと。「この端末に何を落としたか」は端末の事情なので上げない。 */
 const saveOffline = () => LS.set('offline', S.offline);
 
 /* ============ pCloud API ============ */
@@ -2416,11 +2421,54 @@ async function removeAlbum(album) {
 }
 const albumOffline = al => al.tracks.length > 0 && al.tracks.every(t => S.offline[t.id]);
 
-/* ============ 索引を pCloud に置く（端末をまたぐため） ============ */
+/* ============ 索引を pCloud に置く（端末をまたぐため） ============
+ *
+ * 決まりごと：**ログインさえすれば、どこでも自分の環境が出る。**
+ * 端末に残すのは 認証系（合鍵・地域・中継所）と、毎回取ると重いもの
+ * （曲の実体・この端末に落とした印・音量）だけ。それ以外はここに集める。
+ *
+ * 以前は「控える」の手動ボタンだけで、取り込むのも棚のフォルダを選んだ時だけだった。
+ * 押していなければ何も上がらず、機器を変えると全部やり直しになっていた。
+ * いまは 変わったら自動で上げ、開いたら自動で取り込む。
+ */
 const INDEX_NAME = '音楽棚.json';
+
+/* 上げるのは一拍おいてから。★を続けて付けても、上がるのは一度。 */
+let cloudT = 0, cloudBusy = false, cloudHold = false, cloudReady = false;
+function cloudSoon(ms = 8000) {
+  if (!S.auth || !S.rootId) return;          // まだ入っていない・棚が決まっていない
+  if (cloudHold) return;                     // 取り込みの最中。往復させない
+  /* **取り込みが済むまで、絶対に上げない。**
+     取り込みに失敗した直後に上げると、pCloud の控えを手元の乏しい中身で
+     上書きしてしまう。ここを塞がないと「新しい端末で開いたら全部消えた」が起きる。
+     失敗したままなら、その回は一度も上げない（次に開いた時にやり直す）。 */
+  if (!cloudReady) return;
+  clearTimeout(cloudT);
+  cloudT = setTimeout(() => { cloudPush(); }, ms);
+}
+async function cloudPush() {
+  if (cloudBusy || !S.auth || !S.rootId) return;
+  cloudBusy = true;
+  try { await saveIndexToCloud(); LS.set('syncAt', Date.now()); }
+  catch (e) { note('索引を上げられません: ' + e.message); }
+  finally { cloudBusy = false; }
+}
+/* 閉じる時に、溜めていた分を投げておく。待たないので取りこぼすことはあるが、
+   次に開いた時にまた上がるので、失うのは最後の数秒ぶんだけ。 */
+addEventListener('pagehide', () => { if (cloudT) { clearTimeout(cloudT); cloudPush(); } });
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && cloudT) { clearTimeout(cloudT); cloudPush(); }
+});
+
 async function saveIndexToCloud() {
-  const body = JSON.stringify({ v: 2, rootId: S.rootId, covers: S.covers, meta: S.meta,
-                                fav: S.fav, lists: S.lists, at: new Date().toISOString() });
+  const body = JSON.stringify({
+    v: 3, rootId: S.rootId, rootName: S.rootName,
+    covers: S.covers, meta: S.meta, fav: S.fav, lists: S.lists,
+    /* v3 で足したもの。ここが無いと「機器を変えたら初めまして」になる。 */
+    hist: S.hist.slice(0, 400), plays: S.plays, mood: S.mood,
+    view: { sort: S.sort, cell: S.cell, filter: S.filter, genre: S.genre,
+            deco: S.deco, meter: S.meter },
+    at: new Date().toISOString() });
   const fd = new FormData();
   fd.append('file', new Blob([body], { type: 'application/json' }), INDEX_NAME);
   const u = new URL('https://' + S.host + '/uploadfile');
@@ -2438,14 +2486,51 @@ async function loadIndexFromCloud() {
   if (!f) return false;
   const link = await fetch(await fileLink(f.fileid));
   const j = await link.json();
-  if (j && j.covers) {
-    S.covers = Object.assign({}, j.covers, S.covers); saveCovers();
-    if (j.meta)  { S.meta  = Object.assign({}, j.meta,  S.meta);  saveMeta(); }
-    if (j.fav)   { S.fav   = Object.assign({}, j.fav,   S.fav);   saveFav(); }
-    if (j.lists) { S.lists = Object.assign({}, j.lists, S.lists); saveLists(); }
-    return true;
+  if (!j || !j.covers) return false;
+
+  /* 突き合わせの決まり：**手元の直近の操作を消さない。**
+     どちらにもある鍵は手元が勝つ（Object.assign の後ろが勝つ）。
+     控えを取り込んだせいで、さっき付けた★が消えるのが一番困る。 */
+  cloudHold = true;                      // 取り込み中は上げに行かない（往復になる）
+  try {
+    S.covers = Object.assign({}, j.covers, S.covers); LS.set('covers', S.covers);
+    if (j.meta)  { S.meta  = Object.assign({}, j.meta,  S.meta);  LS.set('meta', S.meta); }
+    if (j.fav)   { S.fav   = Object.assign({}, j.fav,   S.fav);   LS.set('fav', S.fav); }
+    if (j.lists) { S.lists = Object.assign({}, j.lists, S.lists); LS.set('lists', S.lists); }
+    if (j.mood)  { S.mood  = Object.assign({}, j.mood,  S.mood);  LS.set('mood', S.mood); }
+
+    /* 再生回数は「多い方」を採る。足すと、取り込むたびに水増しされる。 */
+    if (j.plays) {
+      for (const [k, v] of Object.entries(j.plays)) {
+        const mine = S.plays[k] || { n: 0, last: 0 };
+        S.plays[k] = { n: Math.max(mine.n || 0, v.n || 0),
+                       last: Math.max(mine.last || 0, v.last || 0) };
+      }
+      LS.set('plays', S.plays);
+    }
+
+    /* 履歴は混ぜて、同じ一件を落として、新しい順に並べ直す。 */
+    if (Array.isArray(j.hist)) {
+      const seen = new Set(), all = [];
+      for (const h of S.hist.concat(j.hist)) {
+        const k = h.a + '/' + h.t + '/' + h.at;
+        if (seen.has(k)) continue;
+        seen.add(k); all.push(h);
+      }
+      all.sort((x, y) => (y.at || 0) - (x.at || 0));
+      S.hist = all.slice(0, 400); LS.set('hist', S.hist);
+    }
+
+    /* 見た目の好みは、この端末でまだ触っていなければ控えに従う。 */
+    if (j.view && !LS.get('viewTouched', false)) {
+      for (const k of ['sort', 'cell', 'filter', 'genre', 'deco', 'meter']) {
+        if (j.view[k] !== undefined) { S[k] = j.view[k]; LS.set(k, S[k]); }
+      }
+    }
+  } finally {
+    cloudHold = false;
   }
-  return false;
+  return true;
 }
 
 /* ============ 探す ============ */
@@ -2804,7 +2889,7 @@ async function screenPick(folderid) {
     S.rootId = folderid; S.rootName = r.metadata.name || '/';
     LS.set('rootId', S.rootId); LS.set('rootName', S.rootName);
     try { await loadShippedCovers(); } catch (e) {}
-    try { await loadIndexFromCloud(); } catch (e) {}
+    try { await loadIndexFromCloud(); cloudReady = true; } catch (e) {}
     go('#/lib');
   };
   main().querySelectorAll('.row').forEach(b => b.onclick = () => go('#/pick/' + b.dataset.id));
@@ -2950,11 +3035,13 @@ async function screenLib() {
   main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
     S.filter = b.dataset.f; LS.set('filter', S.filter); redraw();
   });
-  $('#sortsel').onchange = e => { S.sort = e.target.value; LS.set('sort', S.sort); redraw(); };
+  $('#sortsel').onchange = e => { S.sort = e.target.value; LS.set('sort', S.sort);
+                                 LS.set('viewTouched', true); cloudSoon(); redraw(); };
   $('#gensel').onchange  = e => { S.genre = e.target.value; LS.set('genre', S.genre); redraw(); };
   $('#cell').onclick = () => {
     S.cell = { s: 'm', m: 'l', l: 's' }[S.cell];
-    LS.set('cell', S.cell); document.body.dataset.cell = S.cell; screenLib();
+    LS.set('cell', S.cell); LS.set('viewTouched', true); cloudSoon();
+    document.body.dataset.cell = S.cell; screenLib();
   };
   $('#shufAll').onclick = () => {
     const pool = shown.flatMap(albumRefs);
@@ -3935,8 +4022,8 @@ function screenMenu() {
       <button class="row" id="exp"><span class="nm">索引を書き出す</span><span class="sub">${Object.keys(S.covers).length} 枚</span></button>
       <button class="row" id="imp"><span class="nm">索引を読み込む</span><span class="sub">別の置き場から移すとき</span></button>
       <input id="impf" type="file" accept="application/json,.json" class="hide">
-      <button class="row" id="save"><span class="nm">索引を pCloud に控える</span><span class="sub">${INDEX_NAME}</span></button>
-      <button class="row" id="load"><span class="nm">索引を pCloud から取り込む</span></button>
+      <button class="row" id="save"><span class="nm">いますぐ pCloud に控える</span><span class="sub">${INDEX_NAME}</span></button>
+      <button class="row" id="load"><span class="nm">いますぐ pCloud から取り込む</span><span class="sub">ふだんは開いた時に自動</span></button>
       <button class="row" id="pick"><span class="nm">音楽フォルダを選び直す</span><span class="sub">${esc(S.rootName)}</span></button>
       <button class="row" id="clroff"><span class="nm">端末の音を全部消す</span><span class="sub">${n} 曲</span></button>
       ${S.auth ? `<button class="row" id="drop"><span class="nm">合鍵を捨てる<br>
@@ -3986,8 +4073,8 @@ function screenMenu() {
     const f = e.target.files && e.target.files[0];
     if (f) importIndex(f, () => go('#/lib'));
   };
-  $('#save').onclick = async () => { try { await saveIndexToCloud(); toast('控えました'); } catch (e) { toast('控えられません: ' + e.message); } };
-  $('#load').onclick = async () => { try { toast(await loadIndexFromCloud() ? '取り込みました' : '控えがありません'); renderRoute(); } catch (e) { toast(e.message); } };
+  $('#save').onclick = async () => { try { await saveIndexToCloud(); cloudReady = true; toast('控えました'); } catch (e) { toast('控えられません: ' + e.message); } };
+  $('#load').onclick = async () => { try { const ok = await loadIndexFromCloud(); cloudReady = true; toast(ok ? '取り込みました' : '控えがありません'); renderRoute(); } catch (e) { toast(e.message); } };
   $('#pick').onclick = () => go('#/pick/0');
   $('#clroff').onclick = async () => {
     if ('caches' in window) await caches.delete('tracks-v1');
@@ -5013,6 +5100,21 @@ if ('serviceWorker' in navigator) {
   }).catch(() => {});
 }
 LS.del('link'); LS.del('cors');   /* 前の版が残した判定は捨てる */
+
+/* 開くたびに、pCloud の控えを取り込む。
+   以前は棚のフォルダを選んだ時にしか読まなかったので、機器を変えると
+   「初めまして」になっていた。**ログインさえすれば、どこでも自分の環境が出る。**
+   取り込みは手元を上書きしないので（手元が勝つ規則）、待たずに走らせてよい。 */
+if (S.auth && S.rootId) {
+  loadIndexFromCloud()
+    .then(ok => {
+      cloudReady = true;                    // 控えが無かった場合も「見に行けた」ので上げてよい
+      if (ok) { note('控えを取り込んだ'); renderRoute(); }
+      else note('控えはまだ無い（次に変えた時に作られる）');
+    })
+    .catch(e => note('控えを取り込めません（この回は上げません）: ' + e.message));
+}
+
 document.body.dataset.cell = S.cell;
 loadTMood().then(() => { if (/^#\/(album|lib|moods)/.test(location.hash || '')) renderRoute(); });
 renderRoute();
