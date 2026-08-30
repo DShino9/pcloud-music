@@ -825,6 +825,39 @@ const BANDS = 84;
 
 /* いま鳴っている音そのものを読めるかで決める。
    読めない音を解析器に通すと、ブラウザは音を消す（実機で踏んだ）。 */
+/* 曲を丸ごと落として手元で鳴らし直す。素直な GET なら事前問い合わせが起きないので、
+   相手が CORS を許していれば通る。通れば手元の音になり、解析は必ずできる。 */
+async function bufferHere(c) {
+  const t = c.al.tracks[c.i];
+  const url = au.currentSrc || au.src || '';
+  if (!url || url.startsWith('blob:')) return false;
+  const msg = $('#nmsg');
+  if (msg) msg.textContent = '曲を手元に読み込んでいます…';
+  let blobUrl;
+  try {
+    const r = await fetch(url, { referrerPolicy: 'no-referrer' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const b = await r.blob();
+    if (b.size < 10000) throw new Error('中身が小さすぎます');
+    blobUrl = URL.createObjectURL(b);
+  } catch (e) { note('手元に読めない: ' + (e.message || e)); return false; }
+  keepBlob(t.id, blobUrl);
+  const pos = au.currentTime, playing = !au.paused;
+  await new Promise(res => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; probing = false; clearTimeout(tm);
+      au.removeEventListener('loadedmetadata', fin); au.removeEventListener('error', fin); res(); };
+    const tm = setTimeout(fin, 9000);
+    probing = true;
+    au.addEventListener('loadedmetadata', fin); au.addEventListener('error', fin);
+    au.crossOrigin = null; au.src = blobUrl; au.load();
+  });
+  try { au.currentTime = pos; } catch (e) {}
+  if (playing) au.play().catch(() => {});
+  note('手元に読み込んだ（解析できる）');
+  return true;
+}
+
 /* CORS の印を付けて読み込み直せるか試す。通れば解析器に繋げる。
    駄目なら印を外して元に戻す。位置も再生状態も保つ。 */
 async function tryCors() {
@@ -835,13 +868,16 @@ async function tryCors() {
     let done = false;
     const fin = ok => {
       if (done) return; done = true; clearTimeout(tm); probing = false;
-      au.removeEventListener('loadedmetadata', onOk); au.removeEventListener('error', onNg);
+      au.removeEventListener('loadedmetadata', onOk); au.removeEventListener('canplay', onOk);
+      au.removeEventListener('error', onNg);
       res(ok);
     };
     const onOk = () => fin(true), onNg = () => fin(false);
-    const tm = setTimeout(() => fin(false), 9000);
+    const tm = setTimeout(() => fin(false), 12000);
     probing = true;
-    au.addEventListener('loadedmetadata', onOk); au.addEventListener('error', onNg);
+    au.addEventListener('loadedmetadata', onOk);
+    au.addEventListener('canplay', onOk);
+    au.addEventListener('error', onNg);
     au.crossOrigin = cross; au.src = src; au.load();
   });
   const ok = await load('anonymous');
@@ -856,10 +892,13 @@ async function canAnalyse() {
   const src = au.currentSrc || au.src || '';
   if (!src) return false;
   if (src.startsWith('blob:') || src.startsWith(location.origin)) return true;
+  /* Range を付けると事前問い合わせ（preflight）が起き、相手がそれに答えないだけで
+     「読めない」と誤判定してしまう。素直な GET で確かめる。 */
   try {
-    const r = await fetch(src, { headers: { Range: 'bytes=0-1' }, referrerPolicy: 'no-referrer' });
-    return r.ok || r.status === 206;
-  } catch (e) { return false; }
+    const r = await fetch(src, { referrerPolicy: 'no-referrer' });
+    if (r.ok) { try { r.body && r.body.cancel(); } catch (e) {} return true; }
+  } catch (e) {}
+  return false;
 }
 function initGraph() {
   if (V.ctx) return V.ok;
@@ -1386,7 +1425,9 @@ function screenNow() {
     const own = src.startsWith('blob:') || src.startsWith(location.origin);
     /* 読める音かどうかは、実際に印を付けて読み込み直してみるのが確か。
        通れば解析でき、通らなければ元に戻す（音は止めない）。 */
-    if (!own && !(await canAnalyse()) && !(await tryCors())) {
+    /* ① CORS の印を付けて読み直せるか ② 素直な GET で全部落として手元で鳴らせるか。
+       ②が通れば、手元の音になるので解析は必ず通る（本物のレベル計が出る）。 */
+    if (!own && !(await tryCors()) && !(await bufferHere(cc))) {
       $('#nmsg').className = 'msg';
       $('#nmsg').textContent = S.deco
         ? '本物の音量は出せない曲です（pCloud が中身を読ませないため）。いまは飾りとして動かしています'
@@ -2994,7 +3035,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v50');
+  L.push('版: v51');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
