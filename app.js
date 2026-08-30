@@ -1482,41 +1482,10 @@ const VD = {
       x.drawImage(im, dx, dy, zm, zm);
     } else { x.fillStyle = '#132436'; x.fillRect(ox, oy, S0, S0); }
 
-    /* ② 左の水色の帯。奥のジャケットを透かしつつ、白文字が読める濃さにする */
-    const bandW = u(0.40);
-    const bg = x.createLinearGradient(ox, 0, ox + bandW, 0);
-    bg.addColorStop(0,   'rgba(86,178,226,.80)');
-    bg.addColorStop(.72, 'rgba(86,178,226,.72)');
-    bg.addColorStop(1,   'rgba(86,178,226,0)');
-    x.fillStyle = bg; x.fillRect(ox, oy, bandW, S0);
-
-    /* ③ 左上のタイトル（アルバム名）。長ければ縮めて2行まで */
-    const title = cleanName(al.name).toUpperCase();
-    x.textBaseline = 'alphabetic';
-    let ts = u(0.105);
-    const maxW = u(0.355);
-    const wrap = (txt, size) => {
-      x.font = '800 ' + size + 'px "Hiragino Sans",-apple-system,sans-serif';
-      const ws = txt.split(/\s+/), lines = []; let cur2 = '';
-      for (const wd of ws) {
-        const t2 = cur2 ? cur2 + ' ' + wd : wd;
-        if (x.measureText(t2).width > maxW && cur2) { lines.push(cur2); cur2 = wd; } else cur2 = t2;
-      }
-      if (cur2) lines.push(cur2);
-      return lines;
-    };
-    let lines = wrap(title, ts);
-    while (lines.length > 2 && ts > u(0.05)) { ts *= 0.86; lines = wrap(title, ts); }
-    lines = lines.slice(0, 2);
-    x.font = '800 ' + ts + 'px "Hiragino Sans",-apple-system,sans-serif';
-    x.fillStyle = '#fff';
-    x.shadowColor = 'rgba(0,0,0,.35)'; x.shadowBlur = u(0.012); x.shadowOffsetY = u(0.004);
-    lines.forEach((ln, i) => x.fillText(ln, ox + u(0.055), oy + u(0.12) + i * ts * 1.02));
-    x.shadowBlur = 0; x.shadowOffsetY = 0;
-
     /* ④ 盤 */
-    const nd = ok ? discNudge(im, al.id) : { dx: 0, dy: 0 };
-    const dr = u(0.52), cx = ox + u(0.055 + nd.dx), cy = oy + u(0.90 + nd.dy);
+    /* 左下から差し込む。ただし中心の穴が画面に入る位置に置く。
+       穴が見えないと、これが CD だと分からない。 */
+    const dr = u(0.46), cx = ox + u(0.26), cy = oy + u(0.80);
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
@@ -1713,11 +1682,10 @@ const VD = {
       x.strokeStyle = 'rgba(255,255,255,.20)'; x.lineWidth = 1; x.stroke();
     }
 
-    /* ⑤ 盤の右の札。アーティストと曲名 */
-    const spot = ok ? quietSpot(im, al.id) : 'br';
-    const bx = BOXES[spot] || BOXES.br;
-    const px = ox + u(bx[0]), pw = S0 - u(bx[0]) - u(0.04);
-    const ph = u(BOXH[spot] || 0.235), py = oy + u(bx[1]);
+    /* ⑤ 左上の札。アーティストと曲名。場所は動かさない。 */
+    const spot = 'tl';
+    const px = ox + u(0.04), pw = u(0.62);
+    const ph = u(0.235), py = oy + u(0.04);
     x.fillStyle = 'rgba(226,222,196,.93)';
     x.fillRect(px, py, pw, ph);
     x.strokeStyle = 'rgba(150,148,120,.9)'; x.lineWidth = Math.max(1, u(0.004));
@@ -4293,7 +4261,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v97');
+  L.push('版: v98');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
