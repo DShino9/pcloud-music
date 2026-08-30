@@ -3071,6 +3071,9 @@ const FILTERS = {
   all:    ['すべて',        () => true],
   fav:    ['★',            al => isFav('a' + al.id)],
   recent: ['最近聴いた',    al => lastPlayed(al) > 0],
+  /* 「よく聴く順」は並び順にはあったが、絞り込みには無かった。
+     3回以上かけた盤だけを出す。1〜2回は「最近聴いた」で足りる。 */
+  most:   ['よく聴く',      al => playCount(al) >= 3],
   iffy:   ['要確認',        al => { const c = S.covers[al.id]; return c && !c.manual && c.sure === false; }],
   none:   ['ジャケット無し', al => !coverOf(al)],
 };
@@ -3211,7 +3214,13 @@ async function screenLib() {
   const tg = $('#triage'); if (tg) tg.onclick = () => go('#/triage');
   const redraw = () => { scrollMem['#/lib'] = 0; screenLib(); window.scrollTo(0, 0); };
   main().querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
-    S.filter = b.dataset.f; LS.set('filter', S.filter); redraw();
+    S.filter = b.dataset.f; LS.set('filter', S.filter);
+    /* 「よく聴く」を選んだのに、アーティスト順のままでは意味が薄い。
+       回数の多い順に並べ替えて出す。 */
+    if (S.filter === 'most' && S.sort !== 'most') {
+      S.sort = 'most'; LS.set('sort', S.sort); LS.set('viewTouched', true); cloudSoon();
+    }
+    redraw();
   });
   $('#sortsel').onchange = e => { S.sort = e.target.value; LS.set('sort', S.sort);
                                  LS.set('viewTouched', true); cloudSoon(); redraw(); };
