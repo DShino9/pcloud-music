@@ -953,7 +953,7 @@ const VD = {
     x.shadowBlur = 0; x.shadowOffsetY = 0;
 
     /* ④ 盤 */
-    const dr = u(0.315), cx = ox + u(0.245), cy = oy + u(0.755);
+    const dr = u(0.40), cx = ox + u(0.20), cy = oy + u(0.735);
     x.save(); x.translate(cx, cy);
     x.beginPath(); x.arc(2, u(0.008), dr, 0, 7); x.fillStyle = 'rgba(0,0,0,.35)'; x.fill();
     x.rotate(spin);
@@ -978,7 +978,7 @@ const VD = {
     const step = Math.min(0.115, (Math.PI * 1.5) / Math.max(1, ring.length));
     const start = -((ring.length - 1) * step) / 2;
     for (let i = 0; i < ring.length; i++) {
-      x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.80);
+      x.save(); x.rotate(start + i * step); x.translate(0, -dr * 0.84);
       x.fillText(ring[i], 0, 0); x.restore();
     }
     x.textAlign = 'left'; x.textBaseline = 'alphabetic'; x.restore();
@@ -1025,18 +1025,27 @@ const VD = {
     const n = 24, gap = u(0.0135), bw = Math.max(1.5, u(0.0062));
     const mw = u(0.05) + n * gap;
     const mx = ox + S0 - u(0.055) - mw, my = oy + u(0.845), rowH = u(0.052);
+    const live = V.ok;
     x.font = '700 ' + u(0.04) + 'px "Hiragino Sans",-apple-system,sans-serif';
     [['L', lvL], ['R', lvR]].forEach((row, ri) => {
       const y = my + ri * rowH;
-      x.fillStyle = 'rgba(255,255,255,.95)';
+      x.fillStyle = live ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.40)';
       x.fillText(row[0], mx, y + u(0.014));
       for (let i = 0; i < n; i++) {
-        const v = band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0);
+        const v = live ? band[Math.floor(i * BANDS / n)] * (0.5 + row[1] * 1.0) : 0;
         const bh = Math.max(u(0.004), v * u(0.05));
-        x.fillStyle = `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`;
+        x.fillStyle = live ? `rgba(255,255,255,${0.4 + Math.min(0.55, v * 1.2)})`
+                           : 'rgba(255,255,255,.20)';
         x.fillRect(mx + u(0.05) + i * gap, y - bh / 2, bw, bh);
       }
     });
+    if (!live) {
+      x.font = u(0.026) + 'px "Hiragino Sans",-apple-system,sans-serif';
+      x.fillStyle = 'rgba(255,255,255,.55)';
+      x.textAlign = 'right';
+      x.fillText('端末に入れると動きます', ox + S0 - u(0.055), my + rowH * 2 + u(0.02));
+      x.textAlign = 'left';
+    }
     x.restore();
     x.beginPath(); x.rect(ox - 1, oy - 1, S0 + 2, S0 + 2);
     x.strokeStyle = `rgba(255,255,255,${0.05 + beatE * 0.22})`;
@@ -1262,8 +1271,10 @@ function screenNow() {
     const own = src.startsWith('blob:') || src.startsWith(location.origin);
     if (!own && !(await canAnalyse())) {
       $('#nmsg').className = 'msg';
-      $('#nmsg').innerHTML = 'いまの流し方だと音を解析できません。' +
-        '<b>アルバムを「端末に入れる」と、全部の絵が動きます</b>（回転ジャケットは今も動きます）。';
+      $('#nmsg').innerHTML = 'いまの流し方だと音を解析できません（レベル計は止まったままです）。' +
+        ' <button class="hbtn" id="ndl" style="padding:5px 10px;font-size:12px">このアルバムを端末に入れる</button>';
+      const nd = $('#ndl');
+      if (nd) nd.onclick = e => { e.currentTarget.textContent = '入れています…'; downloadAlbum(cc.al, e.currentTarget); };
       note('解析しない（読めない音）');
       return;
     }
@@ -2769,7 +2780,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v43');
+  L.push('版: v44');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
