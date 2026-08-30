@@ -105,11 +105,21 @@ body[data-cell="s"] .cov .go{width:28px;height:28px;font-size:11px}
 
 /* ---- 絞り込みと並び替え ---- */
 .libbar{position:sticky;top:calc(var(--top) + var(--hdr));z-index:14;
-  background:var(--bg);padding:8px 0 4px;margin:-12px 0 8px}
+  background:var(--bg);padding:6px 0 5px;margin:-12px 0 6px}
 body.playing .libbar{top:calc(var(--top) + var(--hdr) + var(--bar))}
-.libbar .chips{margin-bottom:8px}
-.libbar .tools{margin-bottom:8px}
-.libbar .srch{margin-bottom:4px}
+/* 横に流せる1行に詰める。縦を食わせない。 */
+.libbar .row1{display:flex;gap:6px;align-items:center;overflow-x:auto;padding-bottom:3px;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.libbar .row1::-webkit-scrollbar{display:none}
+.libbar .row1 > *{flex:0 0 auto}
+.libbar .sep{width:1px;height:20px;background:var(--line);margin:0 2px}
+.libbar .hbtn{padding:5px 9px;font-size:12.5px;border-radius:8px}
+.libbar select{padding:5px 22px 5px 9px;font-size:12.5px;border-radius:8px;width:auto;flex:0 0 auto;
+  max-width:38vw;background-position:calc(100% - 12px) 50%,calc(100% - 8px) 50%}
+.libbar .chips{margin:5px 0 0;gap:6px}
+.libbar .chips .hbtn{padding:4px 9px;font-size:12px}
+.libbar .srch{margin:5px 0 0}
+.libbar .srch input{padding:8px 11px;font-size:14px}
 .chips{display:flex;gap:7px;overflow-x:auto;margin-bottom:11px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
 .chips .hbtn{flex:none}
 .tools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -330,6 +340,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=54"></script>
+<script src="./app.js?v=55"></script>
 </body>
 </html>

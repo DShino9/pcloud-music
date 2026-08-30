@@ -2315,8 +2315,11 @@ async function screenLib() {
   const gl = genreList();
   const shown = shownAlbums();
   main().innerHTML = sw + `<div class="libbar">
-      ${tabsOf('lib')}
-      <div class="tools">
+      <div class="row1">
+        <button class="hbtn on" data-tab="lib">棚</button>
+        <button class="hbtn" data-tab="artists">アーティスト</button>
+        <button class="hbtn" data-tab="genres">ジャンル</button>
+        <span class="sep"></span>
         <select id="sortsel">${Object.keys(SORTS).map(k =>
           `<option value="${k}"${S.sort === k ? ' selected' : ''}>${SORTS[k][0]}</option>`).join('')}</select>
         <select id="gensel">
@@ -2328,7 +2331,7 @@ async function screenLib() {
         <button class="hbtn" id="smart">条件</button>
       </div>
       <div class="chips">${Object.keys(FILTERS).map(k =>
-        `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]} ${counts[k]}</button>`).join('')}</div>
+        `<button class="hbtn ${S.filter === k ? 'on' : ''}" data-f="${k}">${labels[k]}${counts[k] ? ' ' + counts[k] : ''}</button>`).join('')}</div>
     </div>` + gridOf(shown) +
     (shown.length ? '' : `<div class="empty">${S.albums.length ? 'この条件に当てはまるものはありません' : '音楽ファイルが見つかりません'}</div>`);
 
@@ -2369,7 +2372,14 @@ function screenBrowse(kind) {
   $('#btnMenu').classList.remove('hide');
   const gs = groupsOf(kind);
   const none = S.albums.filter(al => !(kind === 'artist' ? cleanName(al.artist) : albumGenre(al))).length;
-  main().innerHTML = `<div class="libbar">${tabsOf(kind === 'artist' ? 'artists' : 'genres')}
+  main().innerHTML = `<div class="libbar">
+      <div class="row1">
+        <button class="hbtn ${kind === 'artist' ? '' : ''}" data-tab="lib">棚</button>
+        <button class="hbtn ${kind === 'artist' ? 'on' : ''}" data-tab="artists">アーティスト</button>
+        <button class="hbtn ${kind === 'genre' ? 'on' : ''}" data-tab="genres">ジャンル</button>
+        <span class="sep"></span>
+        <span style="color:var(--dim);font-size:12px">${gs.length} 組</span>
+      </div>
       <div class="srch"><input id="bq" placeholder="${kind === 'artist' ? 'アーティストを絞る' : 'ジャンルを絞る'}"
         autocapitalize="off"></div></div>
     <div id="blist"></div>
@@ -2399,10 +2409,10 @@ function screenBy(kind, key) {
   const list = S.albums.filter(al =>
     (kind === 'artist' ? cleanName(al.artist) : albumGenre(al)) === key)
     .sort((SORTS[S.sort] || SORTS.artist)[1]);
-  main().innerHTML = `<div class="libbar"><div class="tools">
+  main().innerHTML = `<div class="libbar"><div class="row1">
       <button class="hbtn" id="pall2">▶ 通して聴く</button>
       <button class="hbtn" id="shuf2">🔀 シャッフル</button>
-      <span class="a" style="align-self:center">${list.length} アルバム</span>
+      <span style="color:var(--dim);font-size:12px">${list.length} アルバム</span>
     </div></div>` + gridOf(list);
   wireGrid();
   $('#pall2').onclick = () => startQueue(list.flatMap(albumRefs), 0);
@@ -3360,7 +3370,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v54');
+  L.push('版: v55');
   L.push('入口ごし: ' + (GATE ? 'はい（符号は端末に無い）' : 'いいえ'));
   L.push('共有リンク: ' + (S.code ? 'あり' : 'なし'));
   L.push('公開リンク経由: ' + (S.pub ? 'はい' : 'いいえ'));
