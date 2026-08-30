@@ -599,6 +599,23 @@ function nowSheet() {
      ]);
 }
 
+/* プレイリストへ入れる。曲でもアルバムでも同じ流れ。 */
+function addToList(refs, label) {
+  if (!refs.length) return;
+  const names = Object.keys(S.lists);
+  const items = names.map(n => ['≡', n + '（' + S.lists[n].length + ' 曲）', () => {
+    S.lists[n] = S.lists[n].concat(refs.map(r => ({ a: r.al.id, t: r.al.tracks[r.i].id })));
+    saveLists(); toast(n + ' に ' + refs.length + ' 曲を入れました', 2500);
+  }]);
+  items.push(['＋', '新しく作る', () => {
+    const n = prompt('名前を付けてください', label || '新しいリスト');
+    if (!n) return;
+    S.lists[n] = (S.lists[n] || []).concat(refs.map(r => ({ a: r.al.id, t: r.al.tracks[r.i].id })));
+    saveLists(); toast(n + ' を作りました', 2500);
+  }]);
+  sheet({ name: 'プレイリストに入れる', sub: refs.length + ' 曲', cover: coverOf(refs[0].al) }, items);
+}
+
 function albumSheet(al) {
   const fav = isFav('a' + al.id);
   sheet({ name: al.name, sub: [al.artist, albumGenre(al), albumYear(al)].filter(Boolean).join(' · '),
@@ -615,6 +632,10 @@ function albumSheet(al) {
      [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
       () => { toggleFav('a' + al.id); renderRoute(); }],
      ['💿', 'アルバムを開く', () => go('#/album/' + al.id)],
+     ['🎤', 'このアーティストを見る', () => go('#/by/artist/' + encodeURIComponent(artistOf(al) || al.artist || al.name))],
+     albumGenre(al) ? ['🏷', 'ジャンル「' + albumGenre(al) + '」を見る',
+       () => go('#/by/genre/' + encodeURIComponent(albumGenre(al)))] : null,
+     ['≡', 'プレイリストに入れる', () => addToList(albumRefs(al), cleanName(al.name))],
      ['🖼', 'ジャケットを変える', () => go('#/cover/' + al.id)],
      ]);
 }
@@ -622,6 +643,10 @@ function trackSheet(al, i) {
   const t = al.tracks[i], fav = isFav('t' + t.id);
   sheet({ name: trackTitle(t), sub: [al.artist, al.name].filter(Boolean).join(' — '), cover: coverOf(al) },
     [['▶', '今すぐ再生', () => play(al, i)],
+     ['🔀', 'この曲から、アルバムをシャッフル', () => {
+        const rest = shuffle(albumRefs(al).filter(r => r.i !== i));
+        startQueue([{ al, i }].concat(rest), 0);
+      }],
      ['🌙', 'この曲の雰囲気で流す', () => {
         const g = tmoodOf(al, i);
         if (!g || !g.length) { toast('この曲の雰囲気はまだ分かっていません', 3500); return; }
@@ -629,9 +654,12 @@ function trackSheet(al, i) {
       }],
      ['⤵', '次に再生', () => enqueueNext([{ al, i }])],
      ['＋', '列の最後に追加', () => enqueueEnd([{ al, i }])],
+     ['≡', 'プレイリストに入れる', () => addToList([{ al, i }], trackTitle(t))],
      [fav ? '★' : '☆', fav ? 'お気に入りから外す' : 'お気に入りに入れる',
       () => { toggleFav('t' + t.id); renderRoute(); }],
-     ['💿', 'アルバムを開く', () => go('#/album/' + al.id)]]);
+     ['💿', 'アルバムを開く', () => go('#/album/' + al.id)],
+     ['🎤', 'このアーティストを見る',
+      () => go('#/by/artist/' + encodeURIComponent(artistOf(al) || al.artist || al.name))]]);
 }
 
 /* ============ 再生 ============ */
@@ -1962,6 +1990,7 @@ function screenNow() {
         <button id="nprev">⏮</button><button id="nplay">▶</button><button id="nnext">⏭</button>
         <button class="hbtn" id="nq">次に流れる</button>
         <button class="hbtn" id="nalb">アルバム</button>
+        <button class="hbtn" id="nart">アーティスト</button>
       </div>
       <div class="msg" id="nmsg"></div>
     </div>`;
@@ -2030,6 +2059,11 @@ function screenNow() {
   $('#nplay').onclick  = () => { au.paused ? au.play().catch(() => {}) : au.pause(); setTimeout(paint, 60); };
   $('#nq').onclick     = () => go('#/queue');
   $('#nalb').onclick   = () => { const c2 = cur(); if (c2) go('#/album/' + c2.al.id); };
+  const na = $('#nart');
+  if (na) na.onclick = () => {
+    const c2 = cur(); if (!c2) return;
+    go('#/by/artist/' + encodeURIComponent(artistOf(c2.al) || c2.al.artist || c2.al.name));
+  };
   $('#npick').onclick  = () => nowSheet();
   /* 画面を開くたびに見張りを足していたので、離れた後も呼ばれて落ちていた。
      前の分を必ず外してから足す。 */
@@ -3219,6 +3253,8 @@ function screenAlbum(id) {
           <button class="hbtn" id="qnext">次に再生</button>
           <button class="hbtn" id="qend">列に足す</button>
           <button class="hbtn" id="cov">ジャケット</button>
+          <button class="hbtn" id="aart">🎤 アーティスト</button>
+          <button class="hbtn" id="alist">≡ プレイリスト</button>
           ${moodOf(al) ? `<button class="hbtn" id="amood">🌙 この雰囲気で流す</button>` : ''}
 
         </div>
@@ -3231,6 +3267,8 @@ function screenAlbum(id) {
         <button class="star ${isFav('t' + t.id) ? 'on' : ''}" data-star="${t.id}">${isFav('t' + t.id) ? '★' : '☆'}</button>
         <button class="dots" data-tmenu="${i}">⋮</button>
       </div>`).join('')}</div>`;
+  $('#aart').onclick = () => go('#/by/artist/' + encodeURIComponent(artistOf(al) || al.artist || al.name));
+  $('#alist').onclick = () => addToList(albumRefs(al), cleanName(al.name));
   const am = $('#amood');
   if (am) am.onclick = () => {
     const g2 = tmoodOf(al, 0);
@@ -4270,7 +4308,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v101');
+  L.push('版: v102');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
