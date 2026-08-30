@@ -4334,7 +4334,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v106');
+  L.push('版: v107');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   {
     const cs = Object.values(S.covers);
@@ -4396,7 +4396,7 @@ function jbImg(name) {
   const im = new Image();
   JBIMG[name] = im;
   im.onerror = () => { JBIMG[name] = null; };
-  im.src = './img/' + name + '.png';
+  im.src = './img/' + name + '.webp';
   return im;
 }
 const jbReady = im => !!(im && im.complete && im.naturalWidth);
@@ -4599,9 +4599,9 @@ function drawFrontImg(x, w, h, u, panel, t0, noise) {
   const prog = (au.duration ? au.currentTime / au.duration : 0) || 0;
   /* 板は正方形。画面に収まる最大の正方形で置く */
   const S0 = Math.min(w, h), px = (w - S0) / 2, py = (h - S0) / 2;
-  const cx = px + S0 / 2, cy = py + S0 / 2;
-  const HOLE = 0.585;                       /* 板の穴の直径（板の幅に対する割合） */
-  const R = S0 * HOLE / 2;
+  const cx = px + S0 * 0.5038, cy = py + S0 * 0.5029;   /* 穴の中心は少しずれている */
+  const HOLE = 0.616;                       /* 板の穴の直径（実物を測った値） */
+  const R = S0 * HOLE / 2 * 1.03;           /* 穴より少し大きく。隙間を見せない */
 
   x.fillStyle = '#140c07'; x.fillRect(0, 0, w, h);
 
@@ -4617,7 +4617,9 @@ function drawFrontImg(x, w, h, u, panel, t0, noise) {
     x.lineWidth = 1; x.stroke();
   }
   const LR = R * 0.34;
-  x.save(); x.beginPath(); x.arc(0, 0, LR, 0, 7); x.clip();
+  x.save();
+  x.rotate(-spin);                       /* ラベルは回さない。回すと読めない */
+  x.beginPath(); x.arc(0, 0, LR, 0, 7); x.clip();
   x.fillStyle = '#efe6d2'; x.fillRect(-LR, -LR, LR * 2, LR * 2);
   const lim = c ? coverImage(c.al) : null;
   if (lim && lim.complete && lim.naturalWidth) {
@@ -4662,29 +4664,33 @@ function drawFrontImg(x, w, h, u, panel, t0, noise) {
   /* ③ 腕。支点は板の右上。曲の進みに合わせて内へ寄る */
   const arm = jbImg('arm');
   if (jbReady(arm)) {
-    const AW = S0 * 0.46, AH = AW * (arm.naturalHeight / arm.naturalWidth);
-    const ax = cx + R * 0.98, ay = cy - R * 0.86;
-    const a0 = playing ? (0.72 + prog * 0.34) : 0.38;
-    x.save(); x.translate(ax, ay); x.rotate(a0 + Math.PI * 0.5);
-    /* 絵の支点は左端の少し内側 */
-    x.drawImage(arm, -AW * 0.12, -AH / 2, AW, AH);
+    /* 頭を盤のどこに落とすかを先に決め、支点からそこへ向ける。
+       角度から逆算すると不自然な向きになった。 */
+    const PIV = 0.19, HEAD = 0.87;                 /* 絵の中での支点と頭の位置 */
+    const ax = cx + R * 1.10, ay = cy - R * 1.02;  /* 支点は右上、ふちの外 */
+    const hang = -0.95;                            /* 頭は盤の右上に落ちる */
+    const d = R * (playing ? (0.90 - prog * 0.46) : 1.02);
+    const hx = cx + Math.cos(hang) * d, hy = cy + Math.sin(hang) * d;
+    const L = Math.hypot(hx - ax, hy - ay);
+    const AW = L / (HEAD - PIV), AH = AW * (arm.naturalHeight / arm.naturalWidth);
+    const ang = Math.atan2(hy - ay, hx - ax);
+    x.save(); x.translate(ax, ay); x.rotate(ang);
+    x.shadowColor = 'rgba(0,0,0,.45)'; x.shadowBlur = R * 0.05; x.shadowOffsetY = R * 0.02;
+    x.drawImage(arm, -PIV * AW, -AH / 2, AW, AH);
     x.restore();
   }
 
-  /* ④ 銘板。文字はこちらで書く */
-  const plate = jbImg('plate');
-  if (jbReady(plate)) {
-    const PW = S0 * 0.34, PH = PW * (plate.naturalHeight / plate.naturalWidth);
-    const bx = cx - PW / 2, by = py + S0 * 0.022;
-    x.drawImage(plate, bx, by, PW, PH);
+  /* ④ 銘板は板に描き込まれている。文字だけ載せる。 */
+  {
+    const bw = S0 * 0.24, bcy = py + S0 * 0.0315;
     x.fillStyle = '#3a2a12'; x.textAlign = 'center'; x.textBaseline = 'middle';
-    let ps = PH * 0.42;
+    let ps = S0 * 0.021;
     const txt = '音 楽 棚';
     x.font = '600 ' + ps + 'px Georgia,"Hiragino Mincho ProN",serif';
-    while (x.measureText(txt).width > PW * 0.84 && ps > 6) {
+    while (x.measureText(txt).width > bw * 0.8 && ps > 6) {
       ps *= 0.92; x.font = '600 ' + ps + 'px Georgia,"Hiragino Mincho ProN",serif';
     }
-    x.fillText(txt, cx, by + PH / 2);
+    x.fillText(txt, px + S0 * 0.5, bcy);
     x.textAlign = 'left'; x.textBaseline = 'alphabetic';
   }
 }
