@@ -2926,7 +2926,10 @@ function moodQueue(seed, n = 60) {
 /* AcousticBrainz は、録音1件ごとに「明るい・切ない・激しい・穏やか・賑やか・
    踊れる・歌なし」を確率で持っている。鍵も要らない。
    MusicBrainz で曲を突き止めてから拾ったものを、索引にして配ってある。 */
-const TAGS = ['明るい','切ない','激しい','穏やか','賑やか','電子','踊れる','明るい音','暗い音','歌なし'];
+const TAGS = ['明るい','切ない','激しい','穏やか','賑やか','踊れる','明るい音','暗い音'];
+/* 声か楽器かの判定と「電子」は、はっきり外すことがあった（歌ものに歌なしが付いた）。
+   古い索引に残っていても使わない。 */
+const TAGS_BAD = new Set(['歌なし','電子']);
 const tkey = s2 => String(s2 || '').toLowerCase()
   .replace(/[^0-9a-z\u3040-\u30ff\u4e00-\u9fff]+/g, '');
 let TMOOD = null, tmoodIdx = null;
@@ -2950,7 +2953,7 @@ function tmoodOf(al, i) {
   let hit = e.tracks.find(x => x.k === k);
   if (!hit && k) hit = e.tracks.find(x => x.k.includes(k) || k.includes(x.k));
   if (!hit && e.tracks.length === al.tracks.length) hit = e.tracks[i];
-  return hit ? hit.g : null;
+  return hit ? hit.g.filter(g => !TAGS_BAD.has(g)) : null;
 }
 /* 札の付いた曲を、棚ぜんぶから集める。 */
 function allTagged() {
@@ -4072,7 +4075,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v72');
+  L.push('版: v73');
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
   L.push('音の道: ' + (V.pipeWay || '未確認') + '／同じ置き場: ' + (V.sameOrigin === true ? 'はい（波形が出る）' : V.sameOrigin === false ? 'いいえ' : '未確認'));
   L.push('入口ごしの配り: ' + (V.pipe === null ? '未確認' : V.pipe ? '通る（許可不要で波形が出る）' : '通らない'));
