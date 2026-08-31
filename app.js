@@ -2549,6 +2549,14 @@ const albumOffline = al => al.tracks.length > 0 && al.tracks.every(t => S.offlin
  * いまは 変わったら自動で上げ、開いたら自動で取り込む。
  */
 const INDEX_NAME = '音楽棚.json';
+/* 控えは **決まった場所** に置く。
+   前は「棚のフォルダの中」に置いていたが、それだと在り処を知るのに
+   先に棚を選ばせるしかなく、**新しい機器では毎回フォルダを選ばされた**。
+   選ばないと控えが読めず、ジャケットも★も降りてこない（実際そうなった）。
+   決まった場所なら、ログインした瞬間に読める。中に棚の場所も書いてあるので、
+   選ぶ手間そのものが消える。 */
+const INDEX_DIR = '/棚もの';
+const INDEX_PATH = INDEX_DIR + '/' + INDEX_NAME;
 
 /* 上げるのは一拍おいてから。★を続けて付けても、上がるのは一度。 */
 let cloudT = 0, cloudBusy = false, cloudHold = false, cloudReady = false;
@@ -2586,11 +2594,13 @@ async function saveIndexToCloud() {
     view: { sort: S.sort, cell: S.cell, filter: S.filter, genre: S.genre,
             deco: S.deco, meter: S.meter },
     at: new Date().toISOString() });
+  /* 置き場が無ければ作る。あれば何も起きない。 */
+  try { await api('createfolderifnotexists', { path: INDEX_DIR }); } catch (e) {}
   const fd = new FormData();
   fd.append('file', new Blob([body], { type: 'application/json' }), INDEX_NAME);
   const u = new URL('https://' + S.host + '/uploadfile');
   u.searchParams.set('auth', S.auth);
-  u.searchParams.set('folderid', S.rootId);
+  u.searchParams.set('path', INDEX_DIR);
   u.searchParams.set('filename', INDEX_NAME);
   u.searchParams.set('nopartial', 1);
   const r = await fetch(u, { method: 'POST', body: fd });
@@ -2598,12 +2608,35 @@ async function saveIndexToCloud() {
   if (j.result !== 0) throw new PCloudError(j.result, j.error);
 }
 async function loadIndexFromCloud() {
-  const list = await api('listfolder', { folderid: S.rootId });
-  const f = (list.metadata.contents || []).find(c => !c.isfolder && c.name === INDEX_NAME);
+  /* 決まった場所を先に見る。**棚を選んでいなくても読める。**
+     見つからなければ、昔の置き場（棚のフォルダの中）も見る。 */
+  let f = null, old = false;
+  try {
+    const st = await api('stat', { path: INDEX_PATH });
+    if (st.metadata && !st.metadata.isfolder) f = st.metadata;
+  } catch (e) { /* まだ無い */ }
+  if (!f && S.rootId) {
+    old = true;
+    try {
+      const list = await api('listfolder', { folderid: S.rootId });
+      f = (list.metadata.contents || []).find(c => !c.isfolder && c.name === INDEX_NAME) || null;
+    } catch (e) {}
+  }
   if (!f) return false;
   const link = await fetch(await fileLink(f.fileid));
   const j = await link.json();
   if (!j || !j.covers) return false;
+
+  /* 棚の場所も控えに入っている。まだ選んでいなければ、これを使う。
+     これで「毎回フォルダを選ばされる」が消える。 */
+  if (!S.rootId && j.rootId) {
+    S.rootId = j.rootId; LS.set('rootId', S.rootId);
+    S.rootName = j.rootName || ''; LS.set('rootName', S.rootName);
+    note('棚の場所を控えから引き継いだ');
+  }
+  /* 昔の置き場から読んだなら、決まった場所へ移しておく。
+     次の機器は選ばずに済むようになる。 */
+  if (old) { note('控えを決まった場所へ移す'); setTimeout(() => cloudPush(), 2500); }
 
   /* 突き合わせの決まり：**手元の直近の操作を消さない。**
      どちらにもある鍵は手元が勝つ（Object.assign の後ろが勝つ）。
@@ -3032,7 +3065,14 @@ function screenLogin() {
       note('入れた（合鍵 ' + String(S.auth).length + '文字）');
       $('#pw').value = '';
       say('入れました。棚を開きます…', 'ok');
-      go(S.rootId ? '#/lib' : '#/pick/0');
+      /* 棚を選ばせる前に、控えを見に行く。場所が書いてあれば選ばずに済む。 */
+      let picked = !!S.rootId;
+      if (!picked) {
+        say('前の続きを探しています…');
+        try { await loadIndexFromCloud(); cloudReady = true; picked = !!S.rootId; }
+        catch (e) { note('控えを見に行けません: ' + (e.message || e)); }
+      }
+      go(picked ? '#/lib' : '#/pick/0');
     } catch (e) {
       note('駄目だった: code=' + e.code + ' ' + (e.message || ''));
       $('#m').className = 'msg err';
