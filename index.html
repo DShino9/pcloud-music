@@ -86,7 +86,9 @@ body[data-cell="s"]{--cell:104px} body[data-cell="m"]{--cell:148px} body[data-ce
 body[data-cell="s"] .al .t{font-size:12px;-webkit-line-clamp:1}
 body[data-cell="s"] .al .a{font-size:10.5px}
 body[data-cell="s"] .cov .go{width:28px;height:28px;font-size:11px}
-.al{text-align:left;width:100%}
+.al{text-align:left;width:100%;
+  /* 画面の外にある升目は組まない。1500枚を一度に組むと非力な端末が潰れる。 */
+  content-visibility:auto;contain-intrinsic-size:auto 232px}
 .cov{position:relative;width:100%;aspect-ratio:1;border-radius:10px;overflow:hidden;
   background:linear-gradient(145deg,#22222b,#171720);border:1px solid var(--line)}
 .cov img{width:100%;height:100%;object-fit:cover;display:block}
