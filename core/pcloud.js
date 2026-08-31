@@ -89,7 +89,9 @@ async function api(method, params = {}, opt = {}) {
   } finally { clearTimeout(timer); }
   if (!r.ok) throw new PCloudError(-1, 'HTTP ' + r.status);
   const j = await r.json();
-  if (j.result !== 0) throw new PCloudError(j.result, j.error);
+  /* 断り文句には**番号を添える**。`Invalid request.` だけでは、
+     どこが悪いのか調べようがない（実際に調べ直す羽目になった）。 */
+  if (j.result !== 0) throw new PCloudError(j.result, (j.error || '断られました') + '（' + j.result + '）');
   return j;
 }
 
@@ -187,18 +189,69 @@ async function relayAlive(relay) {
 /* ---- 棚の走査 ----
    1回の recursive listfolder で丸ごと取る。folderid を鍵にするので NFD/NFC を踏まない。
    返すのは「NFCにした名前 → fileid」。同名が複数あれば後勝ち（棚では起きない前提）。 */
+/* 名前→fileid の対を作る。**走査の仕方は scanFolder に任せる。**
+   ここで直に `recursive:1` を頼んでいたせいで、その頼み方を断る口では
+   丸ごと失敗していた（棚が空のままになる）。入口を1つにまとめる。 */
 async function indexFolder(folderid, opt = {}) {
-  const r = await api('listfolder', { folderid, recursive: 1 },
-    { host: opt.host, auth: opt.auth, ms: opt.ms || 60000 });
+  const r = await scanFolder(folderid, opt);
   const map = {};
-  let n = 0;
-  (function walk(node) {
-    for (const c of (node.contents || [])) {
-      if (c.isfolder) walk(c);
-      else { map[nfc(c.name)] = c.fileid; n++; }
+  for (const f of r.files) map[f.name] = f.fileid;
+  return { map, count: r.files.length, name: r.name,
+           truncated: !!r.truncated, left: r.left || 0 };
+}
+
+/* 走査。`indexFolder` は名前→fileid の対だけを返すので、
+   **同じ名前が別の場所にもあると潰れる。** 棚の外にある分を拾うときは
+   どこにあるかまで要るので、こちらは1件ずつ在処を付けて返す。 */
+async function scanFolder(folderid, opt = {}) {
+  /* **根っこの頼み方は1通りではない。** `folderid=0` を断る口があるので
+     （`Invalid request.` が返った）、番号 → `path:"/"` の順に試す。
+     どちらも通らなければ、断り文句に番号を付けて返す（何が悪いか分かるように）。 */
+  const ways = [{ folderid }, ...(folderid === 0 ? [{ path: '/' }] : [])];
+  let last = null;
+  for (const w of ways) {
+    try {
+      const r = await api('listfolder', { ...w, recursive: 1 },
+        { host: opt.host, auth: opt.auth, ms: opt.ms || 120000 });
+      const out = [];
+      (function walk(node, path) {
+        for (const c of (node.contents || [])) {
+          if (c.isfolder) walk(c, path + '/' + nfc(c.name));
+          else out.push({ name: nfc(c.name), fileid: c.fileid, size: c.size || 0,
+                          folderid: c.parentfolderid, path });
+        }
+      })(r.metadata, '');
+      return { files: out, name: r.metadata.name || '/' };
+    } catch (e) { last = e; }
+  }
+  /* 再帰の頼みが通らないときは**自分で歩く。**
+     1階ずつの `listfolder` は棚のフォルダ選びで通っているので、これなら確実。
+     頼む回数は増えるが、通らないより良い。 */
+  try {
+    const out = [];
+    const q = [{ id: folderid, path: '' }];
+    /* **黙って打ち切らない。** 上限で止めると「もっとあるはずなのに出ない」に
+       なるが、止まったことが誰にも分からない。上限は高く取り、
+       当たったら**そう言う**（`truncated` で返す）。 */
+    const LIMIT = 40000;
+    let guard = 0;
+    while (q.length && guard++ < LIMIT) {
+      const { id, path } = q.shift();
+      const r = await api('listfolder', { folderid: id },
+        { host: opt.host, auth: opt.auth, ms: opt.ms || 30000 });
+      for (const c of (r.metadata.contents || [])) {
+        if (c.isfolder) q.push({ id: c.folderid, path: path + '/' + nfc(c.name) });
+        else out.push({ name: nfc(c.name), fileid: c.fileid, size: c.size || 0,
+                        folderid: id, path });
+      }
+      if (opt.onStep) opt.onStep(out.length, q.length);
     }
-  })(r.metadata);
-  return { map, count: n, name: r.metadata.name || '/' };
+    const truncated = q.length > 0;
+    if (truncated) console.warn('走査を打ち切った: 部屋が多すぎる', q.length);
+    return { files: out, name: '/', truncated, left: q.length };
+  } catch (e) {
+    throw last || e;
+  }
 }
 
 /* ---- 手元に置いた分（Cache Storage）----
@@ -297,6 +350,24 @@ async function uploadFile(folderid, name, blob, opt = {}) {
   return (j.metadata && j.metadata[0] && j.metadata[0].fileid) || null;
 }
 
+/* 棚の中で動かす。**上げ直さない。**
+   すでに pCloud にあるものを棚のフォルダへ入れるとき、
+   一度落として上げ直すのは無駄（時間も通信も）。向こう側で動かせば一瞬で済む。
+   `copy` を立てると元を残して写す。 */
+async function moveFile(fileid, tofolderid, opt = {}) {
+  const j = await api(opt.copy ? 'copyfile' : 'renamefile',
+                      { fileid, tofolderid }, { host: opt.host, auth: opt.auth });
+  return (j.metadata && j.metadata.fileid) || fileid;
+}
+
+/* フォルダごと動かす。棚から下ろしたものを、周りのものと**紐づけたまま**
+   一箇所へ寄せるのに要る（中身を1つずつ動かすと、途中で落ちたとき散らばる）。 */
+async function moveFolder(folderid, tofolderid, opt = {}) {
+  const j = await api('renamefolder', { folderid, tofolderid },
+                      { host: opt.host, auth: opt.auth });
+  return (j.metadata && j.metadata.folderid) || folderid;
+}
+
 async function deleteFile(fileid, opt = {}) {
   await api('deletefile', { fileid }, { host: opt.host, auth: opt.auth });
   return true;
@@ -351,7 +422,7 @@ root.PCloud = {
   HOSTS, nfc, sha1hex, PCloudError,
   store, logger, api, login,
   relayUrl, relayAlive, indexFolder, shelfCache, download, fetchFile,
-  ensureFolder, uploadFile, deleteFile, readFile,
+  ensureFolder, uploadFile, deleteFile, moveFile, moveFolder, readFile, scanFolder,
 };
 
 })(window);
