@@ -355,6 +355,17 @@ async function scanLibrary(folderid) {
 /* サイトを見て回らない。鍵の要らない JSON API を決まった順に叩くだけ。
    iTunes → Deezer(JSONP) の2段。ここで 95% 付く。残りは手で選ぶ。 */
 const artUrl = (u, px) => u.replace(/\/\d+x\d+bb\.(jpg|png)$/, '/' + px + 'x' + px + 'bb.jpg');
+/* 150px の升目に 1200px の絵を流し込むと、非力な端末では絵の展開だけで潰れる。
+   会社ごとに、頼めば小さいものを寄越してくれる。 */
+function smallArt(u, px) {
+  if (!u || u.startsWith('data:')) return u;
+  if (u.indexOf('mzstatic.com') >= 0) return u.replace(/\/\d+x\d+bb\.(jpg|png)$/, '/' + px + 'x' + px + 'bb.jpg');
+  if (u.indexOf('dzcdn.net') >= 0)    return u.replace(/\/\d+x\d+-000000/, '/' + px + 'x' + px + '-000000');
+  if (u.indexOf('coverartarchive.org') >= 0)
+    return u.replace(/\/front(-\d+)?$/, '/front-' + (px <= 260 ? 250 : 500));
+  if (u.indexOf('/getthumb') >= 0)    return u.replace(/size=\d+x\d+/, 'size=' + px + 'x' + px);
+  return u;
+}
 
 let itunesDelay = 320;          // iTunes は取りすぎると 403 を返す。様子を見て伸ばす。
 let itunesNext  = 0;
@@ -1128,7 +1139,7 @@ function paintPlayer() {
   $('#pnx').textContent = nx ? '次: ' + trackTitle(nx.al.tracks[nx.i]) : '次はありません';
   $('#pqn').textContent = Math.max(0, P.q.length - P.qi - 1);
   const cv = coverOf(c.al);
-  $('#pcov').src = cv || '';
+  $('#pcov').src = cv ? smallArt(cv, 120) : '';
   $('#pcov').style.visibility = cv ? 'visible' : 'hidden';
   $('#play').textContent = au.paused ? '▶' : '⏸';
 }
@@ -1588,6 +1599,14 @@ const BOXES = { br: [0.50,0.60], tr: [0.50,0.28], mr: [0.46,0.40], tc: [0.36,0.2
 const BOXH  = { br: 0.235, tr: 0.235, mr: 0.235, tc: 0.235, bs: 0.185 };
 
 
+/* 非力な端末では、描き方を落とす。虹や暈しは真っ先に切る。 */
+const LITE = { on: false };
+try {
+  const cores = navigator.hardwareConcurrency || 4;
+  const tv = /\b(TV|SMART-TV|AFT[A-Z]|BRAVIA|AndroidTV|CrKey)\b/i.test(navigator.userAgent || '');
+  if (tv || cores <= 4) LITE.on = true;
+} catch (e) {}
+
 /* レベル計の品揃え。飾りである以上、見た目くらいは選べる方がよい。 */
 const METERS = {
   wave: '波形（細い縦棒）',
@@ -1691,7 +1710,7 @@ const VD = {
     const u = v => S0 * v;                      /* 盤面の寸法はすべて一辺からの割合で決める */
 
     /* 余った地は、ジャケットをぼかして敷く。黒地に浮くと寒々しい。 */
-    if (mode !== 'sq' && ok) {
+    if (mode !== 'sq' && ok && !LITE.on) {
       x.save();
       const z = Math.max(w, h) * 1.25, bx = w / 2 - z / 2, by = h / 2 - z / 2;
       try { x.filter = 'blur(' + Math.round(Math.min(w, h) * 0.06) + 'px) brightness(0.42) saturate(0.8)'; } catch (e) {}
@@ -1699,6 +1718,7 @@ const VD = {
       x.restore();
       x.fillStyle = 'rgba(8,8,12,.35)'; x.fillRect(0, 0, w, h);
     } else if (mode !== 'sq') { x.fillStyle = '#0d0f14'; x.fillRect(0, 0, w, h); }
+    if (mode !== 'sq' && ok && LITE.on) { x.fillStyle = '#12151b'; x.fillRect(0, 0, w, h); }
 
     x.save();
     const rr = Math.max(5, u(0.012));
@@ -1738,7 +1758,7 @@ const VD = {
       vb.addColorStop(.45, 'rgba(20,19,20,1)');
       vb.addColorStop(1,   'rgba(9,9,10,1)');
       x.fillStyle = vb; x.fillRect(-dr, -dr, dr * 2, dr * 2);
-      const r0 = dr * 0.375, r1 = dr * 0.965, N = 320;
+      const r0 = dr * 0.375, r1 = dr * 0.965, N = LITE.on ? 70 : 320;
       for (let i = 0; i < N; i++) {
         const rr2 = r0 + (r1 - r0) * (i / N);
         x.strokeStyle = i % 2 ? 'rgba(255,255,255,.030)' : 'rgba(0,0,0,.34)';
@@ -1839,7 +1859,7 @@ const VD = {
 
       /* 虹の正体は回折。見る角度を止めれば、色は「半径」に沿って変わる。
          同心の色の帯を作り、光が当たった扇形だけを残す。 */
-      if (x.createConicGradient) {
+      if (x.createConicGradient && !LITE.on) {
         const rg = x.createRadialGradient(0, 0, dr * 0.19, 0, 0, dr);
         const turns = 2.4, steps = 60, h0 = (spin * 34) % 360;
         for (let i = 0; i <= steps; i++) {
@@ -2209,7 +2229,7 @@ function screenNow() {
     q.innerHTML = `<div class="qh">次に流れる（${Math.max(0, P.q.length - P.qi - 1)}）</div>` +
       (next.map((r, k) => `
         <button class="qi" data-nq="${P.qi + 1 + k}">
-          ${coverOf(r.al) ? `<img loading="lazy" src="${esc(coverOf(r.al))}">` : '<img alt="">'}
+          ${coverOf(r.al) ? `<img loading="lazy" decoding="async" src="${esc(smallArt(coverOf(r.al), 120))}">` : '<img alt="">'}
           <span class="qt"><span class="q1">${esc(trackTitle(r.al.tracks[r.i]))}</span>
             <span class="q2">${esc(r.al.name)}${artistOf(r.al) ? ' · ' + esc(artistOf(r.al)) : ''}</span></span>
         </button>`).join('') || '<div class="qe">この曲でおしまいです</div>');
@@ -2238,11 +2258,15 @@ function screenNow() {
   };
   fit(); addEventListener('resize', fit);
 
-  let last = 0;
+  let last = 0, slow = 0, budget = 0;
   const frame = now => {
     if (location.hash !== '#/now') { V.on = false; return; }
     V.raf = requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now-last)/1000 || 0.016); last = now;
+    /* 非力な端末（テレビなど）では毎秒60枚は描けない。描けていないなら間引く。
+       描く手間そのものも軽い方へ落とす。 */
+    if (dt > 0.030) { if (++slow > 12) LITE.on = true; } else if (slow > 0) slow--;
+    if (LITE.on) { budget += dt; if (budget < 1 / 24) return; budget = 0; }
     if (!au.paused) spin += dt*1.1;
     const live = readAudio(dt);
     const cc = cur(); if (!cc) return;
@@ -2740,7 +2764,7 @@ function screenSearch() {
         </button>`).join('') : '') +
       (r.tracks.length ? `<div class="sect">曲（${r.tracks.length}）</div>` + r.tracks.map((x, k) => `
         <button class="hit2" data-tk="${k}">
-          ${coverOf(x.al) ? `<img loading="lazy" src="${esc(coverOf(x.al))}">` : '<img alt="">'}
+          ${coverOf(x.al) ? `<img loading="lazy" decoding="async" src="${esc(smallArt(coverOf(x.al), 120))}">` : '<img alt="">'}
           <span class="t2"><span class="n2">${esc(trackTitle(x.al.tracks[x.i]))}</span>
             <span class="a2">${esc(x.al.artist)} — ${esc(x.al.name)}</span></span>
         </button>`).join('') : '');
@@ -3169,7 +3193,7 @@ function gridOf(list) {
     const star = isFav('a' + al.id) ? '<span class="badge star">★</span>' : '';
     const y = albumYear(al);
     return `<div class="al" data-open="${al.id}" role="button" tabindex="0">
-      <div class="cov">${cv ? `<img loading="lazy" src="${esc(cv)}" onerror="this.style.display='none'">`
+      <div class="cov">${cv ? `<img loading="lazy" decoding="async" src="${esc(smallArt(cv, 300))}" onerror="this.style.display='none'">`
                             : `<span class="made" style="${madeCover(al)}">${esc(al.name)}</span>`}${badge}${star}
         <button class="dots" data-menu="${al.id}" aria-label="操作">⋮</button>
         <button class="go" data-play="${al.id}" aria-label="再生">▶</button>
@@ -3179,20 +3203,29 @@ function gridOf(list) {
     </div>`;
   }).join('')}</div>`;
 }
+/* 1535枚それぞれに手を4本ずつ配ると、配るだけで固まる。
+   親で一度だけ受けて、押された場所から判断する。 */
+let albumById = null;
+function albumMap() {
+  if (!albumById || albumById.size !== S.albums.length) {
+    albumById = new Map(S.albums.map(a => [String(a.id), a]));
+  }
+  return albumById;
+}
 function wireGrid() {
-  const byId = id => S.albums.find(a => String(a.id) === String(id));
-  main().querySelectorAll('[data-open]').forEach(b => b.onclick = e => {
-    if (e.target.closest('[data-play],[data-menu],[data-fix]')) return;
-    go('#/album/' + b.dataset.open);
-  });
-  main().querySelectorAll('[data-play]').forEach(b => b.onclick = e => {
-    e.stopPropagation(); const al = byId(b.dataset.play); if (al) play(al, 0);
-  });
-  main().querySelectorAll('[data-fix]').forEach(b => b.onclick = e => {
-    e.stopPropagation(); go('#/cover/' + b.dataset.fix);
-  });
-  main().querySelectorAll('[data-menu]').forEach(b => b.onclick = e => {
-    e.stopPropagation(); const al = byId(b.dataset.menu); if (al) albumSheet(al);
+  const g = main().querySelector('.grid');
+  if (!g || g.dataset.wired) return;
+  g.dataset.wired = '1';
+  g.addEventListener('click', e => {
+    const byId = albumMap();
+    const play0 = e.target.closest('[data-play]');
+    if (play0) { e.stopPropagation(); const al = byId.get(play0.dataset.play); if (al) play(al, 0); return; }
+    const fix = e.target.closest('[data-fix]');
+    if (fix) { e.stopPropagation(); go('#/cover/' + fix.dataset.fix); return; }
+    const menu = e.target.closest('[data-menu]');
+    if (menu) { e.stopPropagation(); const al = byId.get(menu.dataset.menu); if (al) albumSheet(al); return; }
+    const open = e.target.closest('[data-open]');
+    if (open) go('#/album/' + open.dataset.open);
   });
 }
 /* 棚・アーティスト・ジャンルの行き来。上に貼り付いて流れない。 */
@@ -3232,7 +3265,9 @@ async function screenLib() {
   /* 同梱のジャケットは毎回当てにいく。フォルダを選び直した人にしか配って
      いなかったので、既に使っている人には一生届かなかった。 */
   if (!shippedDone && S.albums.length) {
-    loadShippedCovers().then(n => { if (n && location.hash === mine) screenLib(); });
+    /* 棚を先に出す。同梱のジャケットは手が空いてから当てる。 */
+    const go2 = () => loadShippedCovers().then(n => { if (n && location.hash === mine) screenLib(); });
+    if (window.requestIdleCallback) requestIdleCallback(go2, { timeout: 5000 }); else setTimeout(go2, 900);
   }
   if (location.hash !== mine) return;      /* 棚を読む間に移っていたら書かない */
   const sw = S.sweep ? `<div class="sweep"><div class="bar"><i id="swbar"></i></div>
@@ -3557,7 +3592,7 @@ function screenTag(tag) {
     </div></div>
     <div id="tlist">${list.map((x, k) => `
       <button class="hit2" data-k="${k}">
-        ${coverOf(x.al) ? `<img loading="lazy" src="${esc(coverOf(x.al))}">`
+        ${coverOf(x.al) ? `<img loading="lazy" decoding="async" src="${esc(smallArt(coverOf(x.al), 120))}">`
                         : `<img alt="" style="${madeCover(x.al)}">`}
         <span class="t2"><span class="n2">${esc(trackTitle(x.al.tracks[x.i]))}</span>
           <span class="a2">${esc(artistOf(x.al) || '')} · ${esc(cleanName(x.al.name))}
@@ -3616,7 +3651,7 @@ function screenBrowse(kind) {
     const list = gs.filter(([k]) => !q || norm(k).includes(q));
     $('#blist').innerHTML = list.map(([k, g]) => `
       <button class="hit2" data-g="${esc(k)}">
-        ${coverOf(g.al) ? `<img loading="lazy" src="${esc(coverOf(g.al))}">`
+        ${coverOf(g.al) ? `<img loading="lazy" decoding="async" src="${esc(smallArt(coverOf(g.al), 120))}">`
                         : `<img alt="" style="${madeCover(g.al)}">`}
         <span class="t2"><span class="n2">${esc(k)}</span>
           <span class="a2">${g.n} アルバム · ${g.tracks} 曲</span></span>
@@ -3898,7 +3933,7 @@ function screenTriage() {
     </div></div>
     <div class="tri">${page.map(al => `
       <div class="tcard" data-id="${al.id}">
-        <img loading="lazy" src="${esc(coverOf(al))}">
+        <img loading="lazy" decoding="async" src="${esc(smallArt(coverOf(al), 300))}">
         <div class="tn">${esc(cleanName(al.name))}</div>
         <div class="ta">${esc(artistOf(al) || '')} · ${al.tracks.length}曲</div>
         <div class="alt" data-alt="${al.id}"></div>
@@ -4761,7 +4796,8 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v121');
+  L.push('版: v123');
+  L.push('軽い描き方: ' + (LITE.on ? 'はい（非力な端末と判断）' : 'いいえ'));
   if (GATE) { try { L.push('入口の口: ' + (await gatePorts()).join(' / ')); } catch (e) {} }
   L.push('入口の型: ' + (gateApi === false ? '音楽用の口が無い（端末の符号で叩く）' : oldGate ? '古い' : '新しい') + ' / 内訳: ' + (oldGate ? '古い（代わりに叩いてもらう）' : '新しい（符号を受け取る）'));
   L.push('曲の雰囲気: ' + (TMOOD ? (allTagged().length + ' 曲') : '未読'));
@@ -5205,7 +5241,7 @@ function screenJuke() {
         <div class="rack">${list.map((al, i) => `
           <button class="strip ${c && c.al.id === al.id ? 'on' : ''}" data-j="${i}">
             <span class="code">${jbCode(i)}</span>
-            ${coverOf(al) ? `<img class="sc" loading="lazy" src="${esc(coverOf(al))}">`
+            ${coverOf(al) ? `<img class="sc" loading="lazy" decoding="async" src="${esc(smallArt(coverOf(al), 120))}">`
                           : `<img class="sc" alt="" style="${madeCover(al)}">`}
             <span class="txt">
               <span class="s1">${esc(al.name)}</span>
@@ -5382,6 +5418,11 @@ if (S.auth && S.rootId) {
 }
 
 document.body.dataset.cell = S.cell;
-loadTMood().then(() => { if (/^#\/(album|lib|moods)/.test(location.hash || '')) renderRoute(); });
+/* 索引は合わせて 1MB 近くある。開いた瞬間に読むと、非力な端末では
+   最初の一画面が出るまで待たされる。手が空いてから読む。 */
+const idle = f => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: 4000 }) : setTimeout(f, 1200));
+idle(() => loadTMood().then(() => {
+  if (/^#\/(album|lib|moods)/.test(location.hash || '')) renderRoute();
+}));
 renderRoute();
 paintPlayer();
