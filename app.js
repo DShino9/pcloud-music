@@ -2877,10 +2877,13 @@ const pathKey = al => nfc(String(al.path || '').split(' / ').slice(1).join('/'))
 let shippedDone = false;
 async function loadShippedCovers() {
   if (shippedDone) return 0;
-  shippedDone = true;
   try {
-    const r = await fetch('./ジャケット.json', { cache: 'no-cache' });
-    if (!r.ok) return 0;
+    /* 日本語のファイル名は、中継や端末によっては取りに行けない。
+       英数字の名前を先に試し、駄目なら昔の名前で試す。 */
+    let r = await fetch('./art.json', { cache: 'no-cache' }).catch(() => null);
+    if (!r || !r.ok) r = await fetch('./ジャケット.json', { cache: 'no-cache' }).catch(() => null);
+    if (!r || !r.ok) { note('同梱のジャケットを取りに行けない'); return 0; }
+    shippedDone = true;                      /* 取れてから印を付ける。失敗したら次でまた試す */
     const j = await r.json();
     const n = applyIndex(j);
     if (n) { saveCovers(); note('同梱のジャケットを当てた: ' + n); }
