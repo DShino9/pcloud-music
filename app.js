@@ -3495,6 +3495,11 @@ const TAGS_BAD = new Set(['歌なし','電子']);
 const tkey = s2 => String(s2 || '').toLowerCase()
   .replace(/[^0-9a-z\u3040-\u30ff\u4e00-\u9fff]+/g, '');
 let TMOOD = null, tmoodIdx = null;
+async function fetchMoodIdx() {
+  let r = await fetch('./mood.json', { cache: 'no-cache' }).catch(() => null);
+  if (!r || !r.ok) r = await fetch('./雰囲気.json', { cache: 'no-cache' }).catch(() => null);
+  return r;
+}
 async function loadTMood() {
   if (TMOOD) return TMOOD;
   /* 索引は育つ（いずれ数 MB）。毎回まるごと読むと開くのが遅くなるので、
@@ -3502,9 +3507,8 @@ async function loadTMood() {
   try {
     if ('caches' in window) {
       const c = await caches.open('idx-v1');
-      const hit = await c.match('./雰囲気.json');
-      const net = fetch('./雰囲気.json', { cache: 'no-cache' })
-        .then(r => { if (r.ok) c.put('./雰囲気.json', r.clone()); return r; });
+      const hit = (await c.match('./mood.json')) || (await c.match('./雰囲気.json'));
+      const net = fetchMoodIdx().then(r => { if (r && r.ok) c.put('./mood.json', r.clone()); return r; });
       const r = hit || await net;
       TMOOD = await r.json();
       if (hit) net.then(async r2 => {                 /* 裏で新しいものに入れ替える */
@@ -3517,8 +3521,8 @@ async function loadTMood() {
       }).catch(() => {});
       return TMOOD;
     }
-    const r = await fetch('./雰囲気.json', { cache: 'no-cache' });
-    if (!r.ok) throw new Error(String(r.status));
+    const r = await fetchMoodIdx();
+    if (!r || !r.ok) throw new Error(r ? String(r.status) : '取りに行けない');
     TMOOD = await r.json();
   } catch (e) { TMOOD = { byPath: {} }; note('曲の雰囲気を読めない: ' + (e.message || e)); }
   return TMOOD;
@@ -4418,7 +4422,9 @@ function routeTo() {
   if (h === '#/smart')           return screenSmart();
   if (h === '#/lists')           return screenLists();
   if (h === '#/history')         return screenHistory();
-  if (!S.rootId && !S.code && !GATE) return screenPick(0);
+  /* 共有リンクなら棚は丸ごと降ってくる。フォルダを聞く必要はない。
+     何も持っていない端末には、符号だけを聞く。 */
+  if (!S.code && !GATE) return screenCode();
   return screenLib();
 }
 $('#btnMenu').onclick   = () => go('#/menu');
@@ -4610,6 +4616,9 @@ function screenCode() {
     <div class="field"><label>合言葉（掛けていなければ空のまま）</label>
       <input id="cpw" type="password" placeholder="${S.linkpw ? '設定済み。変えるときだけ' : ''}" autocomplete="off"></div>
     <button class="primary" id="ctest">つないで棚を読む</button>
+    ${!S.code ? `<div class="note" style="padding:12px 2px 0">
+      符号が分からないときは、<b>入口から入れば聞かれません</b>。
+      合言葉を一度入れるだけで、この端末は覚えられます。</div>` : ''}
     <div class="msg" id="cm"></div>
     ${S.code ? '<div style="height:10px"></div><button class="hbtn" id="cclr" style="width:100%;padding:10px;border-radius:10px">符号を忘れる</button>' : ''}
     <div class="note" style="padding:16px 2px 0;line-height:1.9">
@@ -4796,7 +4805,7 @@ async function selftest() {
     try { const d = await api('getdigest', {}, h, 12000); L.push(h + ': 返事あり ' + (Date.now() - t) + 'ms'); }
     catch (e) { L.push(h + ': ★' + (e.message || e)); }
   }
-  L.push('版: v123');
+  L.push('版: v124');
   L.push('軽い描き方: ' + (LITE.on ? 'はい（非力な端末と判断）' : 'いいえ'));
   if (GATE) { try { L.push('入口の口: ' + (await gatePorts()).join(' / ')); } catch (e) {} }
   L.push('入口の型: ' + (gateApi === false ? '音楽用の口が無い（端末の符号で叩く）' : oldGate ? '古い' : '新しい') + ' / 内訳: ' + (oldGate ? '古い（代わりに叩いてもらう）' : '新しい（符号を受け取る）'));
