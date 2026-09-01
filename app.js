@@ -4613,10 +4613,12 @@ function screenCode() {
     ${S.code ? `<div class="rowlist" style="margin-bottom:14px"><div class="row">
       <span class="nm">いまの符号<br><span class="sub">${esc(S.code.slice(0,3))}••••••${esc(S.code.slice(-2))}
       ${S.linkpw ? '・合言葉あり' : '・合言葉なし'}</span></span></div></div>` : ''}
-    <div class="field"><label>音楽フォルダの共有リンク${S.code ? '（変えるときだけ）' : ''}</label>
+    <div class="field"><label>音楽フォルダの<b>共有リンクの URL</b>${S.code ? '（変えるときだけ）' : ''}
+      <br><span class="sub">pCloud で 音楽 フォルダを右クリック → 共有 → リンクを取得</span></label>
       <input id="cd" placeholder="https://u.pcloud.link/publink/show?code=…"
         autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-    <div class="field"><label>合言葉（掛けていなければ空のまま）</label>
+    <div class="field"><label>合言葉（<b>pCloud 側でリンクに掛けていなければ空のまま</b>。
+      入口の合言葉や pCloud のパスワードではありません）</label>
       <input id="cpw" type="password" placeholder="${S.linkpw ? '設定済み。変えるときだけ' : ''}" autocomplete="off"></div>
     <button class="primary" id="ctest">つないで棚を読む</button>
     ${!S.code ? `<div class="note" style="padding:12px 2px 0">
@@ -4639,8 +4641,22 @@ function screenCode() {
     </div>`;
   const run = async () => {
     const typed = $('#cd').value.trim();
+    /* ここは共有リンクの URL を入れる欄。メールアドレスや合鍵ではない。
+       間違えやすいので、入れる前に見て言う。 */
+    if (/@/.test(typed) && !/^https?:/i.test(typed)) {
+      $('#cm').className = 'msg err';
+      $('#cm').innerHTML = 'ここは<b>共有リンクの URL</b> を入れる欄です。メールアドレスではありません。<br>'
+        + 'pCloud で 音楽 フォルダを右クリック → 共有 → リンクを取得 で出てくる '
+        + '<code>https://u.pcloud.link/publink/show?code=…</code> をそのまま貼ってください。';
+      return;
+    }
     const { code, host } = typed ? parseCode(typed) : { code: S.code, host: null };
-    if (!code) { $('#cm').className = 'msg err'; $('#cm').textContent = '符号が読み取れません'; return; }
+    if (!code) {
+      $('#cm').className = 'msg err';
+      $('#cm').innerHTML = '符号が読み取れません。<b>共有リンクの URL をそのまま</b>貼ってください'
+        + '（<code>…?code=XXXXXXX</code> の形）。';
+      return;
+    }
     const pw = $('#cpw').value || (typed ? '' : S.linkpw);
     const before = { code: S.code, pw: S.linkpw, host: S.host };
     S.code = code; S.linkpw = pw; if (host) S.host = host;
