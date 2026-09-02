@@ -3824,6 +3824,7 @@ function screenQueue() {
     <div class="tools">
       <button class="hbtn" id="qshuf">🔀 並べ直す</button>
       <button class="hbtn ${P.repeat !== 'off' ? 'on' : ''}" id="qrep">${rep[0]} ${rep[1]}</button>
+      <button class="hbtn" id="qsave">≡ 名前を付けて残す</button>
       <button class="hbtn" id="qclear">空にする</button>
     </div>
     ${now ? `<div class="label" style="color:var(--dim);font-size:12px;margin:4px 0 6px">いま流れている</div>
@@ -3832,6 +3833,7 @@ function screenQueue() {
       次に流れる（${next.length}）</div>${next.map((r, k) => row(r, P.qi + 1 + k)).join('')}` : ''}
     ${past.length ? `<div class="label" style="color:var(--dim);font-size:12px;margin:18px 0 6px">
       流し終えた（${past.length}）</div>${past.map((r, k) => row(r, k)).join('')}` : ''}`;
+  $('#qsave').onclick = () => addToList(P.q.slice(), 'いまの組み合わせ');
   main().querySelectorAll('[data-q]').forEach(b => b.onclick = () => playAt(+b.dataset.q));
   main().querySelectorAll('[data-rm]').forEach(b => b.onclick = () => {
     const i = +b.dataset.rm;
@@ -4330,6 +4332,7 @@ function screenMenu() {
       <button class="row" id="reship"><span class="nm">同梱のジャケットを入れ直す</span><span class="sub">手で選んだものは残します</span></button>
       <button class="row" id="moodgo"><span class="nm">雰囲気を測る</span><span class="sub">${Object.keys(S.mood).length} 枚</span></button>
       <button class="row" id="meta"><span class="nm">ジャンルと年代を集める</span><span class="sub">${Object.keys(S.meta).length} 枚</span></button>
+      <button class="row" id="queue"><span class="nm">次に流れる（いまの列）</span><span class="sub">${P.q.length ? Math.max(0, P.q.length - P.qi - 1) + ' 曲待っています・並べ替え／外す' : '空です'}</span></button>
       <button class="row" id="juke"><span class="nm">ジュークボックス</span><span class="sub">札で選ぶ</span></button>
       <button class="row" id="car"><span class="nm">車モード</span><span class="sub">大きな的で操作する</span></button>
       <button class="row" id="lists"><span class="nm">プレイリスト</span><span class="sub">${Object.keys(S.lists).length} 本</span></button>
@@ -4378,6 +4381,7 @@ function screenMenu() {
   };
   $('#moodgo').onclick = () => sweepMood();
   $('#meta').onclick  = () => sweepMeta();
+  $('#queue').onclick = () => go('#/queue');
   $('#juke').onclick  = () => go('#/juke');
   $('#car').onclick   = () => go('#/car');
   $('#lists').onclick = () => go('#/lists');

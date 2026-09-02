@@ -226,7 +226,7 @@ body.playing .libbar{top:calc(var(--top) + var(--hdr) + var(--bar))}
 .nowbar{height:3px;border-radius:2px;background:#2c2c38;overflow:hidden;margin-bottom:12px}
 .nowbar i{display:block;height:100%;width:0;background:var(--accent)}
 .nowctl{display:flex;align-items:center;justify-content:center;gap:14px}
-.nowctl button{width:52px;height:52px;border-radius:50%;font-size:21px;
+.nowctl button{width:66px;height:66px;border-radius:50%;font-size:26px;
   display:flex;align-items:center;justify-content:center;background:var(--bg2);border:1px solid var(--line)}
 .nowctl button:active{background:#2c2c38}
 .nowctl .hbtn{width:auto;height:auto;border-radius:9px;font-size:13px;padding:9px 13px}
@@ -296,7 +296,7 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
   #player .pc{width:46px;height:46px}
   #player .ti{font-size:14.5px}
   #player .ar,#player .nx{font-size:10.5px}
-  #player .ctl button{width:38px;height:38px;font-size:16px}
+  #player .ctl button{width:46px;height:46px;font-size:19px}
   #player .ctl #pdots{width:24px}
 }
 @media (max-width:380px){
@@ -314,7 +314,7 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 #player .ar{font-size:11.5px;line-height:1.25;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .ctl{display:flex;align-items:center;gap:1px}
 #player .ctl #pdots{width:28px;font-size:16px;color:var(--dim)}
-#player .ctl button{width:42px;height:42px;border-radius:50%;font-size:17px;display:flex;align-items:center;justify-content:center}
+#player .ctl button{width:50px;height:50px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center}
 #player .ctl button:active{background:#2c2c38}
 #seekwrap{position:absolute;left:0;right:0;bottom:-1px;height:14px;touch-action:none;cursor:pointer}
 #seekwrap::before{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;background:#2c2c38}
@@ -443,7 +443,7 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 .jb .strip.on{outline:2px solid #ffb03a;outline-offset:1px}
 /* 下の操作 */
 .jb .keys{display:flex;gap:10px;justify-content:center;padding:14px;flex-wrap:wrap}
-.jb .keys button{min-width:64px;height:52px;border-radius:8px;color:#ffe6c0;font-size:17px;
+.jb .keys button{min-width:76px;height:62px;border-radius:9px;color:#ffe6c0;font-size:19px;
   background:linear-gradient(180deg,#3a2029,#251319);border:1px solid #5a3341;
   box-shadow:0 3px 0 #140b0f, inset 0 1px 0 rgba(255,255,255,.10)}
 .jb .keys button:active{transform:translateY(2px);box-shadow:0 1px 0 #140b0f}
@@ -510,6 +510,6 @@ body.playing .sweep{top:calc(var(--top) + var(--hdr) + var(--bar))}
 <div class="toast" id="toast"></div>
 <audio id="au" preload="none"></audio>
 
-<script src="./app.js?v=132"></script>
+<script src="./app.js?v=134"></script>
 </body>
 </html>
