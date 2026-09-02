@@ -4427,6 +4427,7 @@ function routeTo() {
   if (h === '#/history')         return screenHistory();
   /* 共有リンクなら棚は丸ごと降ってくる。フォルダを聞く必要はない。
      何も持っていない端末には、符号だけを聞く。 */
+  if (h.startsWith('#/setcode/')) return takeCode(decodeURIComponent(h.slice(10)));
   if (!S.code && !GATE) return screenCode();
   return screenLib();
 }
@@ -4601,6 +4602,19 @@ function parseCode(v) {
   return { code: code.replace(/[^A-Za-z0-9]/g, ''), host };
 }
 
+/* 別の端末から渡された符号を受け取る。住所に鍵が入っているので、
+   受け取ったらすぐ住所から消す。 */
+async function takeCode(pack) {
+  const [code, pw] = String(pack || '').split('|');
+  if (!code) { toast('符号が読み取れません', 4000); go('#/code'); return; }
+  S.code = code; S.linkpw = pw || '';
+  LS.set('code', S.code); LS.set('linkpw', S.linkpw);
+  S.albums = [];
+  history.replaceState(null, '', location.pathname);   /* 住所から鍵を消す */
+  toast('符号を受け取りました。棚を読みます', 3000);
+  go('#/lib');
+}
+
 function screenCode() {
   $('#hdr').classList.remove('hide'); $('#back').classList.remove('hide');
   $('#title').textContent = '共有リンクで使う';
@@ -4625,7 +4639,11 @@ function screenCode() {
       符号が分からないときは、<b>入口から入れば聞かれません</b>。
       合言葉を一度入れるだけで、この端末は覚えられます。</div>` : ''}
     <div class="msg" id="cm"></div>
-    ${S.code ? '<div style="height:10px"></div><button class="hbtn" id="cclr" style="width:100%;padding:10px;border-radius:10px">符号を忘れる</button>' : ''}
+    ${S.code ? `<div style="height:10px"></div>
+      <button class="hbtn" id="chand" style="width:100%;padding:10px;border-radius:10px">別の端末へ渡す</button>
+      <div class="msg" id="chm"></div>
+      <div style="height:8px"></div>
+      <button class="hbtn" id="cclr" style="width:100%;padding:10px;border-radius:10px">符号を忘れる</button>` : ''}
     <div class="note" style="padding:16px 2px 0;line-height:1.9">
       <b>誰に何が見えるか</b><br>
       ・このページを開いただけの人には<b>何も見えません</b>。符号はこの端末の中にだけあります<br>
@@ -4681,6 +4699,22 @@ function screenCode() {
   };
   $('#ctest').onclick = run;
   $('#cpw').onkeydown = e => { if (e.key === 'Enter') run(); };
+  const hd = $('#chand');
+  if (hd) hd.onclick = async () => {
+    /* 新しい端末に符号を入れ直すのは面倒なので、開くだけで入る道を渡す。
+       この住所は鍵そのもの。人に見える所へ置かないこと。 */
+    const pack = S.code + (S.linkpw ? '|' + S.linkpw : '');
+    const link = location.origin + location.pathname + '#/setcode/' + encodeURIComponent(pack);
+    let done = false;
+    try { await navigator.clipboard.writeText(link); done = true; } catch (e) {}
+    const m = $('#chm');
+    m.className = 'msg';
+    m.innerHTML = (done ? '<b>写しました。</b>' : '<b>下の住所を写してください。</b>')
+      + '新しい端末で開けば、そのまま棚が出ます。<br>'
+      + '<span style="color:var(--dim)">この住所は鍵そのものです。人に見える所へ置かないでください。</span>'
+      + (done ? '' : '<br><textarea readonly style="width:100%;height:64px;margin-top:8px;font-size:11px">'
+          + esc(link) + '</textarea>');
+  };
   const c = $('#cclr'); if (c) c.onclick = () => {
     S.code = ''; S.linkpw = ''; LS.del('code'); LS.del('linkpw'); S.albums = []; screenCode();
   };
