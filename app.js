@@ -2887,6 +2887,12 @@ async function loadShippedCovers() {
     const j = await r.json();
     const n = applyIndex(j);
     if (n) { saveCovers(); note('同梱のジャケットを当てた: ' + n); }
+    else {
+      /* 0枚なら黙って終わらせない。何枚のうち何枚が当たらなかったかを言う。 */
+      const idx = Object.keys(j.byPath || {}).length;
+      toast('同梱のジャケット ' + idx + ' 枚のうち、この棚に当たったものがありません。'
+          + '⋯ →「つながりを調べる」に内訳が出ます', 8000);
+    }
     return n;
   } catch (e) { note('同梱のジャケットを読めない: ' + (e.message || e)); return 0; }
 }
@@ -2898,12 +2904,27 @@ function applyIndex(j) {
   if (j.fav)    S.fav   = Object.assign({}, j.fav, S.fav);
   if (j.lists)  S.lists = Object.assign({}, j.lists, S.lists);
   if (j.plays)  S.plays = Object.assign({}, j.plays, S.plays);
-  /* 道を鍵にしたものは、いまの棚に当て直す（別の置き場から来たとき用） */
+  /* 道を鍵にしたものは、いまの棚に当て直す。
+     索引の鍵はマウントの道で作ったが、アプリの道は共有リンクから来る。
+     先頭の一段がずれると全部外れるので、後ろから何段かでも当てにいく。 */
   if (j.byPath) {
-    const byKey = new Map(S.albums.map(al => [pathKey(al), al]));
+    const tail = (path, n) => nfc(String(path).split('/').filter(Boolean).slice(-n).join('/')).toLowerCase();
+    const byKey = new Map();
+    const put = (k, al) => { if (k && !byKey.has(k)) byKey.set(k, al); };
+    for (const al of S.albums) {
+      const pk = pathKey(al);
+      put(nfc(pk), al);
+      put(tail(pk, 3), al); put(tail(pk, 2), al); put(tail(pk, 1), al);
+    }
+    let hitFull = 0, hitTail = 0;
     for (const [k, v] of Object.entries(j.byPath)) {
       if (v && v.skip) continue;
-      const al = byKey.get(nfc(k));
+      let al = byKey.get(nfc(k));
+      if (al) hitFull++;
+      else {
+        al = byKey.get(tail(k, 3)) || byKey.get(tail(k, 2)) || byKey.get(tail(k, 1));
+        if (al) hitTail++;
+      }
       /* 自分で選んだものは動かさない。要確認だったものは、確かなものが来たら上げる。 */
       const had = S.covers[al ? al.id : 0];
       const upgrade = had && !had.manual && had.sure === false && v.sure !== false;
@@ -2914,6 +2935,8 @@ function applyIndex(j) {
         n++;
       }
     }
+    note('索引を当てた: 丸ごと一致 ' + hitFull + ' / 後ろで一致 ' + hitTail
+       + ' / 付いた ' + n + ' / 棚 ' + S.albums.length + ' 枚');
   }
   saveCovers(); saveMeta(); saveFav(); saveLists(); savePlays();
   return n;
