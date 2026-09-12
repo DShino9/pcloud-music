@@ -15,15 +15,27 @@ const main = () => $('#main');
 const GATE = !/(^|\.)github\.io$/.test(location.hostname)
   && location.protocol === 'https:'
   && !window.__DS9;
+/* 入口の下のどこに置かれているか分からない（/ とは限らず /ongaku/ のこともある）。
+   自分の居場所から数えた道を先に試し、駄目なら根から試す。 */
+const APP_DIR = location.pathname.replace(/[^/]*$/, '');
 async function gate(path) {
+  const rel = path.replace(/^\//, '');
+  const tries = APP_DIR && APP_DIR !== '/' ? [APP_DIR + rel, '/' + rel] : ['/' + rel];
+  let last = null;
+  for (const t of tries) {
+    const got = await gateOnce(t);
+    if (got.ok) return got.j;
+    last = got;
+    if (got.status !== 404) break;          /* 404 以外はそこで止める（401 など） */
+  }
+  const e = new PCloudError(last.j.result || -10, last.j.error || ('入口が ' + last.status));
+  e.http = last.status;
+  throw e;
+}
+async function gateOnce(path) {
   const r = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const e = new PCloudError(j.result || -10, j.error || ('入口が ' + r.status));
-    e.http = r.status;
-    throw e;
-  }
-  return j;
+  return { ok: r.ok, status: r.status, j };
 }
 /* 古い入口には符号を渡す口が無い。その場合は入口に代わりに叩いてもらう。
    貼り替えを頼まなくても、新旧どちらでも動くようにしておく。 */
@@ -179,6 +191,7 @@ async function getCode(force) {
   try { g = await gate('/api/code'); }
   catch (e) {
     if (e.http === 404) { oldGate = true; note('古い入口。代わりに叩いてもらう道に切り替える'); }
+    if (e.http === 503) note('入口はあるが符号をまだ預かっていない: ' + (e.message || ''));
     throw e;
   }
   memCode = { code: g.code, linkpw: g.linkpw || '' };
@@ -203,7 +216,7 @@ async function apiPub(method, params = {}, ms = 25000) {
         if (oldGate) {
           try { return await apiViaGate(method, params); }
           catch (e2) { if (e2.http === 404) { gateApi = false; note('入口に音楽用の口が無い。端末の符号で叩く'); } else throw e2; }
-        } else if (e.http === 404) { gateApi = false; note('入口に音楽用の口が無い。端末の符号で叩く'); }
+        } else if (e.http === 404 || e.http === 503) { gateApi = false; note('入口から符号を貰えない（' + e.http + '）。端末の符号で叩く'); }
         else throw e;
       }
     }
