@@ -15,6 +15,33 @@ const main = () => $('#main');
 const GATE = !/(^|\.)github\.io$/.test(location.hostname)
   && location.protocol === 'https:'
   && !window.__DS9;
+/* すでに符号を持っている端末が、入口に預ける。
+   これで次からは、どの新しい端末も道具棚から入るだけで済む。
+   人が手を動かす場面を無くすのが目的。預けるのは一度だけ。 */
+/* 手が空いたら呼ぶ。宣言の前後を気にせず使えるように関数で置く。 */
+function whenIdle(f) {
+  if (window.requestIdleCallback) requestIdleCallback(f, { timeout: 4000 });
+  else setTimeout(f, 1200);
+}
+let handedOver = false;
+async function handCodeToGate() {
+  if (!GATE || handedOver || !S.code) return;
+  handedOver = true;
+  const rel = 'api/code';
+  const tries = APP_DIR && APP_DIR !== '/' ? [APP_DIR + rel, '/' + rel] : ['/' + rel];
+  for (const t of tries) {
+    try {
+      const r = await fetch(t, {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: S.code, linkpw: S.linkpw || '', host: S.host }),
+      });
+      if (r.ok) { note('符号を入口に預けた（次の端末からは聞かれない）'); return; }
+      if (r.status !== 404) { note('符号を預けられない: ' + r.status); return; }
+    } catch (e) { note('符号を預けられない: ' + (e.message || e)); return; }
+  }
+}
+
 /* 入口の下のどこに置かれているか分からない（/ とは限らず /ongaku/ のこともある）。
    自分の居場所から数えた道を先に試し、駄目なら根から試す。 */
 const APP_DIR = location.pathname.replace(/[^/]*$/, '');
@@ -3303,6 +3330,8 @@ async function screenLib() {
   }
   /* 同梱のジャケットは毎回当てにいく。フォルダを選び直した人にしか配って
      いなかったので、既に使っている人には一生届かなかった。 */
+  /* 棚が読めた＝符号が正しい。入口がまだ持っていなければ預けておく。 */
+  if (S.albums.length) whenIdle(() => handCodeToGate());
   if (!shippedDone && S.albums.length) {
     /* 棚を先に出す。同梱のジャケットは手が空いてから当てる。 */
     const go2 = () => loadShippedCovers().then(n => { if (n && location.hash === mine) screenLib(); });
@@ -5522,7 +5551,7 @@ if (S.auth && S.rootId) {
 document.body.dataset.cell = S.cell;
 /* 索引は合わせて 1MB 近くある。開いた瞬間に読むと、非力な端末では
    最初の一画面が出るまで待たされる。手が空いてから読む。 */
-const idle = f => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: 4000 }) : setTimeout(f, 1200));
+const idle = f => whenIdle(f);
 idle(() => loadTMood().then(() => {
   if (/^#\/(album|lib|moods)/.test(location.hash || '')) renderRoute();
 }));
