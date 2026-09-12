@@ -4484,6 +4484,12 @@ function renderRoute() {
 }
 function routeTo() {
   const h = location.hash || '';
+  /* 何も持っていないとき、聞く前に入口へ尋ねる。
+     ここより先に「ログインへ」の判定があると、尋ねる機会が無くなる。 */
+  if (!S.auth && !S.code && CODE_GATE && !codeAsked && !h.startsWith('#/setcode/')) {
+    askGateForCode();
+    return;
+  }
   if (!GATE && !S.auth && !S.code) {
     if (h && h !== '#/login') {
       note('合鍵が無いのでログイン画面に戻した（' + h + '）');
