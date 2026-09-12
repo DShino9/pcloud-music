@@ -15,6 +15,11 @@ const main = () => $('#main');
 const GATE = !/(^|\.)github\.io$/.test(location.hostname)
   && location.protocol === 'https:'
   && !window.__DS9;
+/* 道具棚（ds9）の下では GATE は false にしてある（向こうは素の取次ぎ役）。
+   ただし符号だけは入口が預かっている。そこは見に行く。
+   これが無いと、新しい端末が毎回「共有リンクを入れろ」と聞かれる。 */
+const CODE_GATE = !/(^|\.)github\.io$/.test(location.hostname)
+  && location.protocol === 'https:';
 /* すでに符号を持っている端末が、入口に預ける。
    これで次からは、どの新しい端末も道具棚から入るだけで済む。
    人が手を動かす場面を無くすのが目的。預けるのは一度だけ。 */
@@ -24,8 +29,25 @@ function whenIdle(f) {
   else setTimeout(f, 1200);
 }
 let handedOver = false;
+let codeAsked = false;            /* 入口に符号を尋ねたか（一度だけ） */
+async function askGateForCode() {
+  codeAsked = true;
+  main().innerHTML = '<div class="empty">入口から設定を受け取っています…</div>';
+  try {
+    const g = await gate('api/code');
+    if (g && g.code) {
+      S.code = g.code; S.linkpw = g.linkpw || ''; if (g.host) S.host = g.host;
+      LS.set('code', S.code); LS.set('linkpw', S.linkpw); LS.set('host', S.host);
+      note('入口から符号を受け取った（' + String(g.code).length + '文字）');
+      S.albums = [];
+      renderRoute();
+      return;
+    }
+  } catch (e) { note('入口は符号を持っていない: ' + (e.http || '') + ' ' + (e.message || e)); }
+  renderRoute();
+}
 async function handCodeToGate() {
-  if (!GATE || handedOver || !S.code) return;
+  if (!CODE_GATE || handedOver || !S.code) return;
   handedOver = true;
   const rel = 'api/code';
   const tries = APP_DIR && APP_DIR !== '/' ? [APP_DIR + rel, '/' + rel] : ['/' + rel];
@@ -4497,7 +4519,11 @@ function routeTo() {
   /* 共有リンクなら棚は丸ごと降ってくる。フォルダを聞く必要はない。
      何も持っていない端末には、符号だけを聞く。 */
   if (h.startsWith('#/setcode/')) return takeCode(decodeURIComponent(h.slice(10)));
-  if (!S.code && !GATE) return screenCode();
+  if (!S.code && !GATE) {
+    /* 入口が符号を預かっているかもしれない。聞く前に貰いに行く。 */
+    if (CODE_GATE && codeAsked === false) { askGateForCode(); return; }
+    return screenCode();
+  }
   return screenLib();
 }
 $('#btnMenu').onclick   = () => go('#/menu');
