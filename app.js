@@ -5557,6 +5557,18 @@ if ('serviceWorker' in navigator) {
     });
   }).catch(() => {});
 }
+/* 画面の右下に「最新版に更新」。中身は共通部品（core/koushin.js。正本は shelf-core/。触らない）。
+   **消す控えは無い。** 音楽棚は見張り番をやめているので殻の控えを持たず、
+   `tracks-v1`（端末に置いた曲）と `idx-v1`（索引）は消してはいけない。
+   新しい版があるかどうかは、置き場の index.html の `app.js?v=` と見比べて分かる。
+   再生バーは画面の上にあるので、下は空いている。 */
+const BAN = (function () {
+  const el = document.querySelector('script[src*="app.js"]');
+  const m = el && el.getAttribute('src').match(/v=(\d+)/);
+  return m ? 'v' + m[1] : '?';
+})();
+try { Koushin.tsukeru({ ban: BAN, shirushi: 'ongaku-', na: '音楽棚' }); } catch (e) {}
+
 LS.del('link'); LS.del('cors');   /* 前の版が残した判定は捨てる */
 
 /* 開くたびに、pCloud の控えを取り込む。
