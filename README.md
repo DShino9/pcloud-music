@@ -2,7 +2,7 @@
 
 pCloud Drive のマウントを**一切使わない**。棚も再生もジャケットも、すべて
 pCloud の HTTP API 経由なので、マウントが刺さっていても止まらない。
-Mac も要らない（GitHub Pages に置いた HTML と iPhone だけで完結する）。
+Mac も要らない（Cloudflare に置いた HTML と iPhone だけで完結する）。
 
 ## いま何が動くか
 
@@ -90,7 +90,7 @@ MusicBrainz が当たらない盤は、Deezer の BPM と音量から決める�
 | `SIGN_KEY` | 控えに署名する鍵（長い乱数） |
 | `PCLOUD_CODE` | 共有リンクの符号 |
 | `PCLOUD_LINKPW` | 合言葉付きリンクなら、その合言葉 |
-| `APP_BASE` | `https://<ユーザー名>.github.io/pcloud-music` |
+| `APP_BASE` | `https://pcloud-music.d-shino.workers.dev` |
 
 ## 画面の右下の「最新版に更新」（2026-09-14）
 
