@@ -12,14 +12,22 @@ const main = () => $('#main');
    ある。そちらは /api/… を持たないので、探しに行くと全部 404 になり
    「音楽用の口がありません」で止まる（実際そうなった）。
    別の入口は自分で window.__DS9 を名乗るので、それを見て譲る。 */
-const GATE = !/(^|\.)github\.io$/.test(location.hostname)
+/* **直接の置き場の一覧。** ここが唯一の「住所を書く場所」。
+   引っ越したら1行足す（2026-09-16 に github.io → +pages.dev で踏んだ）。
+   ds9 は自分で window.__DS9 を名乗るので、こちらに書かない。
+   gate.js（音楽用の口を配る別の入口）は名乗らないので、
+   「直接でも ds9 でもなければ gate.js」と裏から当てるしかない。
+   → gate.js の生き死にが決まったら（共通 #8）、この当て方ごと消す。 */
+const CHOKU = /(^|\.)(github\.io|pages\.dev)$/.test(location.hostname)
+  || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
+const GATE = !CHOKU
   && location.protocol === 'https:'
   && !window.__DS9;
 /* 道具棚（ds9）の下では GATE は false にしてある（向こうは素の取次ぎ役）。
    ただし符号だけは入口が預かっている。そこは見に行く。
    これが無いと、新しい端末が毎回「共有リンクを入れろ」と聞かれる。 */
-const CODE_GATE = !/(^|\.)github\.io$/.test(location.hostname)
-  && location.protocol === 'https:';
+const CODE_GATE = !CHOKU && location.protocol === 'https:';
 /* すでに符号を持っている端末が、入口に預ける。
    これで次からは、どの新しい端末も道具棚から入るだけで済む。
    人が手を動かす場面を無くすのが目的。預けるのは一度だけ。 */
@@ -135,7 +143,12 @@ const LS = {
    だから設定させない。住所が同じなので /relay で届く。
    github.io で直に開いたときだけ、これまで通り端末の設定を見る。
    （端末ごとに中継所を入れ直させるのが、そもそもの間違いだった） */
-const UNDER_GATE = !/(^|\.)github\.io$/.test(location.hostname);
+/* **住所で判ぜず、入口の名乗りを見る**（2026-09-16）。
+   前は「github.io でなければ入口の後ろ」と決め打ちしていた。GitHub Pages から
+   Cloudflare へ移した途端、直接開いただけなのに入口の後ろだと思い込み、
+   どこにも無い /relay を探しに行く。入口は自分で window.__DS9 を名乗るので、
+   それだけを見る。こうしておけば次に引っ越しても壊れない。 */
+const UNDER_GATE = !!window.__DS9;
 const RELAY_HERE = location.origin + '/relay';
 
 const S = {
@@ -273,7 +286,7 @@ async function apiPub(method, params = {}, ms = 25000) {
   if (!cd) {
     if (!S.code) throw new PCloudError(-14,
       'この入口には音楽用の口がありません。⋯ →「共有リンク」に符号を入れるか、'
-      + 'dshino9.github.io/pcloud-music/ から開いてください');
+      + '音楽棚の公開ページから開いてください');
     cd = { code: S.code, linkpw: S.linkpw };
   }
   const u = new URL('https://' + S.host + '/' + method);
