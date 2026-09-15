@@ -18,7 +18,7 @@ const main = () => $('#main');
    gate.js（音楽用の口を配る別の入口）は名乗らないので、
    「直接でも ds9 でもなければ gate.js」と裏から当てるしかない。
    → gate.js の生き死にが決まったら（共通 #8）、この当て方ごと消す。 */
-const CHOKU = /(^|\.)(github\.io|pages\.dev)$/.test(location.hostname)
+const CHOKU = /(^|\.)(github\.io|workers\.dev|pages\.dev)$/.test(location.hostname)
   || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
 const GATE = !CHOKU
@@ -27,7 +27,11 @@ const GATE = !CHOKU
 /* 道具棚（ds9）の下では GATE は false にしてある（向こうは素の取次ぎ役）。
    ただし符号だけは入口が預かっている。そこは見に行く。
    これが無いと、新しい端末が毎回「共有リンクを入れろ」と聞かれる。 */
-const CODE_GATE = !CHOKU && location.protocol === 'https:';
+/* 符号を預かっている入口の後ろにいるか。ds9 は名乗る。gate.js は名乗らない。
+   **ds9 も workers.dev の上にいる**ので、CHOKU だけで判ずると
+   「入口の下なのに符号を聞きに行かない」になり、新しい端末が毎回
+   共有リンクを求められる（2026-09-16、移行の直後に踏んだ）。 */
+const CODE_GATE = !!window.__DS9 || (!CHOKU && location.protocol === 'https:');
 /* すでに符号を持っている端末が、入口に預ける。
    これで次からは、どの新しい端末も道具棚から入るだけで済む。
    人が手を動かす場面を無くすのが目的。預けるのは一度だけ。 */
